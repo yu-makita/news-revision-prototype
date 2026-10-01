@@ -1,5 +1,16 @@
 import streamlit as st
 from news_recommender import recommend_news, RecommendationError
+from database import (
+    save_user,
+    user_exists,
+    generate_user_id,
+    get_user,
+    update_user,
+)
+from user_form import (
+    show_user_registration_form,
+    show_user_edit_form,
+)
 
 st.set_page_config(
     page_title="ニュース推薦・分身AI",
@@ -34,233 +45,257 @@ st.markdown(
 st.title("ニュース推薦・分身AI")
 st.write("ユーザー情報をもとに、興味を持ちそうなニュースを推薦します。")
 
-st.subheader("ユーザー情報")
 
-age = st.selectbox(
-    "年齢",
-    options=list(range(0, 101)) + [None],
-    format_func=lambda x: "回答しない" if x is None else f"{x}歳",
-)
+# ログイン状態の初期設定
+if "user_id" not in st.session_state:
+    st.session_state.user_id = None
 
-gender = st.selectbox(
-    "性別",
-    ["未選択", "男性", "女性", "その他"],
-)
+if "register_mode" not in st.session_state:
+    st.session_state.register_mode = False
 
-occupation_choice = st.selectbox(
-    "職業",
-    options=[
-        "未選択",
-        "製造業",
-        "建設業",
-        "情報通信（IT・通信・マスコミ）",
-        "卸売・小売・流通",
-        "金融・保険・不動産",
-        "医療・福祉",
-        "飲食・宿泊・サービス",
-        "教育・公務・団体",
-        "学生",
-        "専業主婦・主夫",
-        "無職・求職中",
-        "その他",
-        None,
-    ],
-    format_func=lambda x: "回答しない" if x is None else x,
-)
+if "edit_profile" not in st.session_state:
+    st.session_state.edit_profile = False
 
-if occupation_choice == "その他":
-    occupation = st.text_input(
-        "職業を入力してください",
-        placeholder="例：フリーランス、農業など",
-    )
-else:
-    occupation = occupation_choice
 
-prefectures = [
-    "未選択",
-    "北海道",
-    "青森県",
-    "岩手県",
-    "宮城県",
-    "秋田県",
-    "山形県",
-    "福島県",
-    "茨城県",
-    "栃木県",
-    "群馬県",
-    "埼玉県",
-    "千葉県",
-    "東京都",
-    "神奈川県",
-    "新潟県",
-    "富山県",
-    "石川県",
-    "福井県",
-    "山梨県",
-    "長野県",
-    "岐阜県",
-    "静岡県",
-    "愛知県",
-    "三重県",
-    "滋賀県",
-    "京都府",
-    "大阪府",
-    "兵庫県",
-    "奈良県",
-    "和歌山県",
-    "鳥取県",
-    "島根県",
-    "岡山県",
-    "広島県",
-    "山口県",
-    "徳島県",
-    "香川県",
-    "愛媛県",
-    "高知県",
-    "福岡県",
-    "佐賀県",
-    "長崎県",
-    "熊本県",
-    "大分県",
-    "宮崎県",
-    "鹿児島県",
-    "沖縄県",
-    "海外",
-    "回答しない",
-]
+# -------------------------
+# 未ログイン時
+# -------------------------
+if st.session_state.user_id is None:
 
-prefecture = st.selectbox(
-    "居住地",
-    prefectures,
-)
+    # 新規登録モードではない場合 → ログイン画面
+    if not st.session_state.register_mode:
 
-interests = st.multiselect(
-    "興味のある分野",
-    [
-        "国内",
-        "国際",
-        "経済",
-        "エンタメ",
-        "スポーツ",
-        "IT・テクノロジー",
-        "科学",
-        "ライフ",
-        "地域",
-        "その他",
-    ],
-)
+        st.subheader("ログイン")
 
-st.subheader("Big Five")
+        login_user_id = st.text_input(
+            "参加者ID",
+            placeholder="例：P0001",
+        ).strip().upper()
 
-st.caption("BIG5-BASICのT得点を入力してください。")
+        if st.button("ログイン"):
 
-big5_options = list(range(0, 101)) + [None]
+            if not login_user_id:
+                st.error("参加者IDを入力してください。")
 
-def format_big5(value):
-    return "回答しない" if value is None else str(value)
+            elif user_exists(login_user_id):
+                st.session_state.user_id = login_user_id
+                st.rerun()
 
-col1, col2, col3, col4, col5 = st.columns(5)
+            else:
+                st.error("参加者IDが見つかりません。")
 
-with col1:
-    extraversion = st.selectbox(
-        "外向性",
-        options=big5_options,
-        format_func=format_big5,
-        key="extraversion",
-    )
+        st.write("初めて利用する方")
 
-with col2:
-    agreeableness = st.selectbox(
-        "協調性",
-        options=big5_options,
-        format_func=format_big5,
-        key="agreeableness",
-    )
+        if st.button("新規登録"):
+            st.session_state.register_mode = True
+            st.rerun()
 
-with col3:
-    conscientiousness = st.selectbox(
-        "勤勉性",
-        options=big5_options,
-        format_func=format_big5,
-        key="conscientiousness",
-    )
+    # 新規登録モードの場合
+    else:
 
-with col4:
-    emotionality = st.selectbox(
-        "情動性",
-        options=big5_options,
-        format_func=format_big5,
-        key="emotionality",
-    )
+        if st.button(
+            "← ログイン画面に戻る",
+            key="back_to_login_from_register"
+        ):
+            st.session_state.register_mode = False
+            st.rerun()
 
-with col5:
-    creativity = st.selectbox(
-        "創造性",
-        options=big5_options,
-        format_func=format_big5,
-        key="creativity",
-    )
+        user_profile = show_user_registration_form()
+
+        st.write("")
+
+        left, center, right = st.columns([2, 1, 2])
+
+        with center:
+            if st.button(
+                "登録する",
+                type="primary",
+                use_container_width=True,
+            ):
+                new_user_id = generate_user_id()
+
+                save_user(
+                    new_user_id,
+                    user_profile,
+                )
+
+                st.session_state.user_id = new_user_id
+                st.session_state.register_mode = False
+
+                st.success(
+                    f"登録が完了しました。あなたの参加者IDは「{new_user_id}」です。"
+                )
+
+                st.info(
+                    "次回利用時に必要になるため、この参加者IDを控えてください。"
+                )
+
 
 # 推薦結果を保存するための初期設定
 if "recommendation_result" not in st.session_state:
     st.session_state.recommendation_result = None
 
 
-# 「ニュースを取得・推薦する」ボタンを押したときだけ実行
-if st.button("ニュースを取得・推薦する"):
+# ログイン済みの場合だけ表示
+if st.session_state.user_id is not None:
 
-    # 画面で入力された情報からユーザープロフィールを作成
-    user_profile = {
-        "age": age,
-        "gender": gender,
-        "occupation": occupation,
-        "prefecture": prefecture,
-        "interests": interests,
-        "big5": {
-            "extraversion": extraversion,
-            "agreeableness": agreeableness,
-            "conscientiousness": conscientiousness,
-            "emotionality": emotionality,
-            "creativity": creativity,
-        },
-    }
+    # DBから現在のユーザー情報を取得
+    current_user = get_user(st.session_state.user_id)
 
-    try:
-        with st.spinner(
-            "ニュースを取得して、あなたに合いそうな記事を選んでいます..."
+    if current_user is None:
+        st.error("ユーザー情報を取得できませんでした。")
+        st.stop()
+
+
+    # ==========================================
+    # 登録情報の変更画面
+    # ==========================================
+    if st.session_state.edit_profile:
+
+        # 左上に戻るボタン
+        if st.button(
+            "← ログイン画面に戻る",
+            key="back_to_login_from_user"
         ):
-            result = recommend_news(
-                user_profile=user_profile
+            st.session_state.user_id = None
+            st.session_state.edit_profile = False
+            st.session_state.recommendation_result = None
+            st.rerun()
+
+        edited_profile = show_user_edit_form(current_user)
+
+        # 保存ボタンを中央に配置
+        left, center, right = st.columns([2, 1, 2])
+
+        with center:
+            if st.button(
+                "変更を保存",
+                type="primary",
+                use_container_width=True,
+            ):
+                success = update_user(
+                    st.session_state.user_id,
+                    edited_profile,
+                )
+
+                if success:
+                    st.session_state.edit_profile = False
+                    st.session_state.recommendation_result = None
+                    st.rerun()
+
+                else:
+                    st.error("登録情報を変更できませんでした。")
+
+
+    # ==========================================
+    # 通常のログイン後画面
+    # ==========================================
+    else:
+
+        # 左上にログイン画面へ戻るボタン
+        if st.button("← ログイン画面に戻る"):
+            st.session_state.user_id = None
+            st.session_state.edit_profile = False
+            st.session_state.recommendation_result = None
+            st.rerun()
+
+        st.subheader("ユーザー情報")
+
+        st.write(
+            f"参加者ID：{st.session_state.user_id}"
+        )
+
+        # 興味のある分野
+        interests = current_user.get("interests", [])
+
+        if interests:
+            st.write(
+                f"興味のある分野：{', '.join(interests)}"
+            )
+        else:
+            st.write(
+                "興味のある分野：未登録"
             )
 
-        # 推薦結果を保存
-        st.session_state.recommendation_result = result
+        # Big Five
+        st.write("**Big Five**")
 
-        st.success("推薦が完了しました。")
+        big5 = current_user.get("big5", {})
 
-    except RecommendationError as e:
-        st.error(
-            f"推薦処理でエラーが発生しました：{e}"
-        )
+        col1, col2, col3, col4, col5 = st.columns(5)
 
-    except Exception as e:
-        st.error(
-            f"予期せぬエラーが発生しました：{e}"
-        )
+        with col1:
+            st.metric(
+                "外向性",
+                big5.get("extraversion", "-"),
+            )
+
+        with col2:
+            st.metric(
+                "協調性",
+                big5.get("agreeableness", "-"),
+            )
+
+        with col3:
+            st.metric(
+                "勤勉性",
+                big5.get("conscientiousness", "-"),
+            )
+
+        with col4:
+            st.metric(
+                "情動性",
+                big5.get("emotionality", "-"),
+            )
+
+        with col5:
+            st.metric(
+                "創造性",
+                big5.get("creativity", "-"),
+            )
+
+        # 登録情報変更
+        if st.button("登録情報を変更"):
+            st.session_state.edit_profile = True
+            st.rerun()
+
+        st.divider()
+
+        # ==========================================
+        # ニュース推薦
+        # ==========================================
+        if st.button(
+            "ニュースを取得・推薦する",
+            type="primary",
+        ):
+
+            user_profile = current_user
+
+            try:
+                with st.spinner(
+                    "ニュースを取得して、あなたに合いそうな記事を選んでいます..."
+                ):
+                    result = recommend_news(
+                        user_profile=user_profile
+                    )
+
+                st.session_state.recommendation_result = result
+
+                st.success(
+                    "推薦が完了しました。"
+                )
+
+            except RecommendationError as e:
+                st.error(
+                    f"推薦処理でエラーが発生しました：{e}"
+                )
+
+            except Exception as e:
+                st.error(
+                    f"予期せぬエラーが発生しました：{e}"
+                )
 
 
-# 保存済みの推薦結果を取得
-result = st.session_state.recommendation_result
-
-
-# 推薦結果がある場合だけニュースを表示
-if result is not None:
-
-    recommended = result["recommended_news"]
-
-    # ↓ここから現在の
-    # 「あなたへのおすすめ」
-    # 以降の表示コードをそのまま置く
 
 # 保存されている推薦結果を取得
 result = st.session_state.recommendation_result
