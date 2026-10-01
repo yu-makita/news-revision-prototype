@@ -1,0 +1,11 @@
+# Google Gemini APIの公式最新SDK
+google-genai
+
+# .envファイルから環境変数を読み込むためのライブラリ
+python-dotenv
+
+# RSSフィードの取得・解析用ライブラリ
+feedparser
+
+# 記事HTMLから本文を抽出するためのライブラリ
+beautifulsoup4
