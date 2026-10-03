@@ -9,6 +9,8 @@ import hashlib
 import json
 import sys
 import time
+import random
+import re
 from urllib.error import HTTPError, URLError
 from urllib.parse import urldefrag
 from urllib.request import Request, urlopen
@@ -88,18 +90,59 @@ def _extract_summary(entry) -> str | None:
     return _clean_html_text(raw) if raw else None
 
 
+# RSSの記事情報から配信元を取得する関数
 def _extract_source_from_rss(entry) -> str | None:
+
+    # RSSのsource情報から取得する
     source = entry.get("source")
+
     if isinstance(source, dict):
-        name = source.get("title") or source.get("value")
+        name = (
+            source.get("title")
+            or source.get("value")
+        )
+
         if name:
             return str(name).strip() or None
+
     elif source:
         return str(source).strip() or None
 
+
+    # RSSのauthor情報から取得する
     author = entry.get("author")
+
     if author:
         return str(author).strip() or None
+
+
+    # ==========================================
+    # source / authorがない場合はタイトルから取得する
+    # ==========================================
+    title = entry.get("title")
+
+    if title:
+
+        title = str(title).strip()
+
+        # タイトル末尾の（配信元）を取得する
+        match = re.search(
+            r"[（(]([^（）()]+)[）)]$",
+            title,
+        )
+
+        if match:
+            return match.group(1).strip()
+
+        # タイトル末尾の【配信元】を取得する
+        match = re.search(
+            r"【([^【】]+)】$",
+            title,
+        )
+
+        if match:
+            return match.group(1).strip()
+
 
     return None
 
@@ -376,54 +419,103 @@ def fetch_yahoo_news(
 
     return news_list
 
-def fetch_yahoo_news_for_recommendation(total_limit: int = 10) -> list[dict]:
+# 各カテゴリから、未表示のニュースをランダムに1件ずつ取得する関数
+def fetch_yahoo_news_for_recommendation(
+    exclude_news_ids: set[str] | None = None,
+) -> list[dict]:
     """
-    推薦用に、カテゴリが偏らないようニュースを10件取得する。
-    まず各カテゴリから1件ずつ取得し、
-    足りない分を各カテゴリの未採用記事から補充する。
+    Yahoo!ニュースの各カテゴリから1件ずつ取得する。
+
+    各カテゴリの記事をランダムな順番で確認し、
+    過去に表示済みの記事だった場合は次の記事を確認する。
+    未表示の記事が見つかった時点で、そのカテゴリの記事として採用する。
     """
+
+    # 過去に表示したニュースIDを集合にする
+    excluded_ids = {
+        str(news_id)
+        for news_id in (exclude_news_ids or set())
+    }
+
+    # 今回表示するニュースを保存する
     news_list: list[dict] = []
-    seen_urls: set[str] = set()
-    remaining_entries: list[tuple[str, object]] = []
 
-    # 各カテゴリからまず1件ずつ取得
+    # 今回の9件の中で同じ記事を重複させないために使う
+    selected_urls: set[str] = set()
+
+
+    # ==========================================
+    # 各カテゴリから1件ずつニュースを取得する
+    # ==========================================
     for category, rss_url in YAHOO_NEWS_CATEGORY_RSS.items():
-        entries = _fetch_rss_entries(rss_url, category)
-        first_added = False
 
-        for entry in entries:
-            url = _normalize_url(entry.get("link"))
+        # このカテゴリのRSS記事を取得する
+        entries = _fetch_rss_entries(
+            rss_url,
+            category,
+        )
 
-            if not url or url in seen_urls:
-                continue
-
-            if not first_added:
-                seen_urls.add(url)
-                news_list.append(
-                    _build_news_item(entry, category, url)
-                )
-                first_added = True
-
-                if len(news_list) >= total_limit:
-                    return news_list
-
-            else:
-                remaining_entries.append((category, entry))
-
-    # 9カテゴリで9件なので、残り1件を未採用記事から追加
-    for category, entry in remaining_entries:
-        if len(news_list) >= total_limit:
-            break
-
-        url = _normalize_url(entry.get("link"))
-
-        if not url or url in seen_urls:
+        if not entries:
             continue
 
-        seen_urls.add(url)
-        news_list.append(
-            _build_news_item(entry, category, url)
+
+        # ==========================================
+        # 記事を確認する順番だけランダムにする
+        # ==========================================
+        entry_indexes = list(
+            range(len(entries))
         )
+
+        random.shuffle(
+            entry_indexes
+        )
+
+
+        # ==========================================
+        # 未表示の記事が見つかるまで確認する
+        # ==========================================
+        for index in entry_indexes:
+
+            entry = entries[index]
+
+            url = _normalize_url(
+                entry.get("link")
+            )
+
+            if not url:
+                continue
+
+            # 今回すでに別カテゴリで採用した記事なら次へ進む
+            if url in selected_urls:
+                continue
+
+            news_id = _make_news_id(
+                url
+            )
+
+            # 過去に表示済みなら次の記事を確認する
+            if news_id in excluded_ids:
+                continue
+
+
+            # ==========================================
+            # 未表示の記事を採用する
+            # ==========================================
+            news_list.append(
+                _build_news_item(
+                    entry,
+                    category,
+                    url,
+                )
+            )
+
+            selected_urls.add(
+                url
+            )
+
+            # このカテゴリでは1件だけ採用するため終了する
+            break
+
 
     return news_list
 

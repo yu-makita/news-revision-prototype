@@ -1,4 +1,5 @@
 import gspread
+import uuid
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
@@ -154,3 +155,60 @@ def update_user(user_id, user_profile):
     )
 
     return True
+
+# 1回の推薦で表示したニュース履歴を保存する関数
+def save_news_history(
+    user_id,
+    news_list,
+    session_id,
+):
+    spreadsheet = get_spreadsheet()
+    sheet = spreadsheet.worksheet("news_history")
+
+    # 9件すべてに同じ表示日時を記録する
+    shown_at = datetime.now().isoformat(
+        timespec="seconds"
+    )
+
+    rows = []
+
+    for news in news_list:
+        rows.append([
+            user_id,                 # A: user_id
+            news.get("news_id"),     # B: news_id
+            shown_at,                # C: shown_at
+            session_id,              # D: session_id
+            news.get("title"),       # E: title
+            news.get("category"),    # F: category
+            news.get("source"),      # G: source
+            news.get("url"),         # H: url
+        ])
+
+    if rows:
+        sheet.append_rows(
+            rows,
+            value_input_option="RAW",
+        )
+
+# ユーザーが過去に見たニュースIDを取得する関数
+def get_seen_news_ids(user_id):
+    spreadsheet = get_spreadsheet()
+    sheet = spreadsheet.worksheet("news_history")
+
+    records = sheet.get_all_records()
+
+    seen_news_ids = set()
+
+    for record in records:
+        if str(record.get("user_id")).strip().upper() == user_id.strip().upper():
+
+            news_id = str(record.get("news_id")).strip()
+
+            if news_id:
+                seen_news_ids.add(news_id)
+
+    return seen_news_ids
+
+# 1回のニュース推薦を識別するセッションIDを生成する関数
+def generate_session_id():
+    return f"S-{uuid.uuid4().hex[:8].upper()}"

@@ -340,33 +340,63 @@ def _copy_news(news: dict) -> dict:
     return dict(news)
 
 
+# ユーザー情報をもとに、未表示ニュース10件から最推薦1件を決める関数
 def recommend_news(
     user_profile: dict | None = None,
     news_list: list[dict] | None = None,
     display_count: int = DISPLAY_NEWS_COUNT,
+    seen_news_ids: set[str] | None = None,
 ) -> dict:
     """
-    10件のニュース候補から最推薦1件を決める。
+    既出ニュースを除外した候補から表示ニュースを取得し、
+    その中から最推薦1件を決める。
 
     Returns:
         recommended_news: 最推薦1件
-        other_news: 最推薦以外の9件
-        selected_news_ids: 表示する10件のnews_id一覧
+        other_news: 最推薦以外の記事
+        selected_news_ids: 表示するニュースのnews_id一覧
         recommended_news_id: 最推薦のnews_id
         recommendation_reason: 最推薦の理由
         article_summary: 最推薦記事の要約
     """
-    profile = user_profile if user_profile is not None else TEST_USER_PROFILE
 
+    profile = (
+        user_profile
+        if user_profile is not None
+        else TEST_USER_PROFILE
+    )
+
+    # 既出ニュースIDが指定されていなければ空集合にする
+    seen_ids = {
+        str(news_id)
+        for news_id in (seen_news_ids or set())
+    }
+
+    # ニュース一覧が外部から渡されていない場合は、
+    # 既出ニュースを除外しながらYahoo!ニュースから取得する
+    # 各カテゴリから未表示ニュースを1件ずつ取得する
     items = (
         news_list
         if news_list is not None
-        else fetch_yahoo_news_for_recommendation(total_limit=display_count)
+        else fetch_yahoo_news_for_recommendation(
+            exclude_news_ids=seen_ids,
+        )
     )
 
     if not items:
-        raise RecommendationError("推薦対象のニュースがありません。")
+        raise RecommendationError(
+            "推薦対象のニュースがありません。"
+        )
 
+
+    # 9カテゴリすべてから1件ずつ取得できたか確認する
+    if len(items) < 9:
+        raise RecommendationError(
+            f"9カテゴリすべてのニュースを取得できませんでした。"
+            f"取得できた件数は{len(items)}件です。"
+        )
+
+    # news_idが設定されていないニュースがないか確認する
     missing_ids = [
         index
         for index, news in enumerate(items)
@@ -378,26 +408,34 @@ def recommend_news(
             f"news_id が無いニュースがあります。index={missing_ids}"
         )
 
-    # 取得した10件すべてをそのまま表示候補にする
-    selected_items = [_copy_news(news) for news in items]
+    # 表示するニュースをコピーする
+    selected_items = [
+        _copy_news(news)
+        for news in items[:display_count]
+    ]
 
-    # AIはこの10件から最推薦1件だけを選ぶ
+    # AIが表示候補から最推薦1件を選ぶ
     ranking = _request_recommendation(
         profile,
         selected_items,
     )
 
-    recommended_id = ranking["recommended_news_id"]
+    recommended_id = ranking[
+        "recommended_news_id"
+    ]
 
     recommended_news = None
     other_news = []
 
+    # 最推薦1件と、それ以外のニュースに分ける
     for news in selected_items:
+
         if (
             str(news.get("news_id")) == recommended_id
             and recommended_news is None
         ):
             recommended_news = news
+
         else:
             other_news.append(news)
 
@@ -406,23 +444,40 @@ def recommend_news(
             f"推薦記事を元データに紐付けできませんでした: {recommended_id}"
         )
 
-    # 本文を取得するのは最推薦された1件だけ
+    # 最推薦された1件だけ記事本文を取得する
     try:
-        fetch_article_text_for_news(recommended_news)
+        fetch_article_text_for_news(
+            recommended_news
+        )
+
     except Exception as e:
         print(
             f"【警告】最推薦記事の本文取得に失敗しました: {e}",
             file=sys.stderr,
         )
-        recommended_news["article_text"] = None
 
-    # 最推薦1件だけAIで本文要約
-    article_summary = summarize_article(recommended_news)
-    reason = ranking["recommendation_reason"]
+        recommended_news[
+            "article_text"
+        ] = None
 
-    recommended_news["recommendation_reason"] = reason
-    recommended_news["article_summary"] = article_summary
+    # 最推薦1件だけAIで本文要約する
+    article_summary = summarize_article(
+        recommended_news
+    )
 
+    reason = ranking[
+        "recommendation_reason"
+    ]
+
+    recommended_news[
+        "recommendation_reason"
+    ] = reason
+
+    recommended_news[
+        "article_summary"
+    ] = article_summary
+
+    # 今回表示するニュースのID一覧を作る
     selected_news_ids = [
         str(news.get("news_id"))
         for news in selected_items
@@ -436,7 +491,6 @@ def recommend_news(
         "recommended_news": recommended_news,
         "other_news": other_news,
     }
-
 
 def display_recommendation_result(result: dict) -> None:
     recommended = result["recommended_news"]
