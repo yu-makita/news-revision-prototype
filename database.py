@@ -1,5 +1,6 @@
 import gspread
 import uuid
+import streamlit as st
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
@@ -9,7 +10,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-
+# Googleスプレッドシートへの接続を再利用する関数
+@st.cache_resource
 def get_spreadsheet():
     credentials = Credentials.from_service_account_file(
         "google_credentials.json",
@@ -212,3 +214,33 @@ def get_seen_news_ids(user_id):
 # 1回のニュース推薦を識別するセッションIDを生成する関数
 def generate_session_id():
     return f"S-{uuid.uuid4().hex[:8].upper()}"
+
+# 1回のニュース推薦に対するユーザーの選択結果を保存する関数
+def save_session(
+    session_id,
+    user_id,
+    recommended_news_id,
+    selected_news_id,
+    none_selected,
+):
+    spreadsheet = get_spreadsheet()
+    sheet = spreadsheet.worksheet("sessions")
+
+    # ユーザーが選択を確定した時刻を記録する
+    created_at = datetime.now().isoformat(
+        timespec="seconds"
+    )
+
+    row = [
+        session_id,              # A: session_id
+        user_id,                 # B: user_id
+        created_at,              # C: created_at
+        recommended_news_id,     # D: recommended_news_id
+        selected_news_id,        # E: selected_news_id
+        none_selected,           # F: none_selected
+    ]
+
+    sheet.append_row(
+        row,
+        value_input_option="RAW",
+    )

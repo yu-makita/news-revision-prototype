@@ -5,6 +5,7 @@ from database import (
     get_seen_news_ids,
     save_news_history,
     generate_session_id,
+    save_session,
 )
 
 from news_recommender import (
@@ -228,12 +229,15 @@ def show_home_page():
                 # 今回の推薦を識別するセッションIDを生成する
                 session_id = generate_session_id()
 
+                # ユーザーの選択確定までセッションIDを保持する
+                st.session_state.current_session_id = session_id
+
                 # 今回表示する9件をニュース履歴に保存する
                 save_news_history(
                     st.session_state.user_id,
                     displayed_news,
                     session_id,
-)
+                )
 
             # 推薦結果を画面表示用に保存
             st.session_state.recommendation_result = (
@@ -441,7 +445,7 @@ def show_home_page():
 
 
     # ==========================================
-    # 最も興味を持ったニュースの選択
+    # ユーザーが最も興味を持ったニュースを選択する処理
     # ==========================================
     st.divider()
 
@@ -449,46 +453,100 @@ def show_home_page():
         "最も興味を持ったニュースを選んでください"
     )
 
-    st.write(
-        "上の9件のニュースの中から、"
-        "あなたが実際に最も興味を持った"
-        "ニュースを1つ選んでください。"
-    )
-
-    # おすすめ1件とその他9件をまとめる
+    # おすすめ1件とその他のニュースをまとめる
     all_news = [
         recommended,
         *other_news,
     ]
 
-    selected_news_id = st.radio(
-        "ニュースを選択",
-        options=[
-            news["news_id"]
-            for news in all_news
-        ],
-        format_func=lambda news_id: next(
-            f"「{news['title']}」"
-            for news in all_news
-            if news["news_id"]
-            == news_id
-        ),
-        index=None,
-        key="selected_news",
+    st.write(
+        f"上の{len(all_news)}件のニュースの中から、"
+        "あなたが実際に最も興味を持ったニュースを1つ選んでください。"
     )
 
-    # ニュースが選択された場合に
-    # 選択内容を表示
-    if selected_news_id is not None:
 
-        selected_news = next(
-            news
-            for news in all_news
-            if news["news_id"]
-            == selected_news_id
+    # ==========================================
+    # ニュースまたは「該当なし」を選択するフォーム
+    # ==========================================
+    NONE_SELECTED_VALUE = "__NONE__"
+
+    selection_options = [
+        news["news_id"]
+        for news in all_news
+    ] + [NONE_SELECTED_VALUE]
+
+    # 選択中の操作では再実行せず、
+    # 「選択を確定」を押したときだけ送信する
+    with st.form(
+        "news_selection_form"
+    ):
+
+        selected_value = st.radio(
+            "ニュースを選択",
+            options=selection_options,
+            format_func=lambda value: (
+                "興味を持ったニュースはない"
+                if value == NONE_SELECTED_VALUE
+                else next(
+                    f"「{news['title']}」"
+                    for news in all_news
+                    if news["news_id"] == value
+                )
+            ),
+            index=None,
         )
 
-        st.success(
-            "選択したニュース："
-            f"『{selected_news['title']}』"
+        submitted = st.form_submit_button(
+            "選択を確定",
+            type="primary",
         )
+
+
+    # ==========================================
+    # 選択結果をsessionsシートに保存する
+    # ==========================================
+    if submitted:
+
+        # 何も選択されていない場合
+        if selected_value is None:
+            st.error(
+                "ニュースまたは「興味を持ったニュースはない」を選択してください。"
+            )
+
+        # セッションIDが取得できない場合
+        elif "current_session_id" not in st.session_state:
+            st.error(
+                "セッション情報を取得できませんでした。"
+            )
+
+        else:
+
+            # 「興味を持ったニュースはない」が選択されたか判定する
+            none_selected = (
+                selected_value == NONE_SELECTED_VALUE
+            )
+
+            # 記事を選択した場合だけnews_idを保存する
+            selected_news_id = (
+                ""
+                if none_selected
+                else selected_value
+            )
+
+            # AIが推薦したニュースIDを取得する
+            recommended_news_id = recommended.get(
+                "news_id"
+            )
+
+            # 今回の推薦・選択結果をsessionsシートに保存する
+            save_session(
+                session_id=st.session_state.current_session_id,
+                user_id=st.session_state.user_id,
+                recommended_news_id=recommended_news_id,
+                selected_news_id=selected_news_id,
+                none_selected=none_selected,
+            )
+
+            st.success(
+                "選択結果を保存しました。"
+            )
