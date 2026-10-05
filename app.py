@@ -10,9 +10,17 @@ st.set_page_config(
     layout="wide",
 )
 
-# Streamlit Cloudでapp.pyが起動しているか確認する
-st.write("起動確認")
-
+# Streamlit標準のページナビゲーションを非表示にする
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] {
+        display: none;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 from pages.login_page import show_login_page
 from pages.register_page import show_register_page
