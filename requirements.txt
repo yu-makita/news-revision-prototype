@@ -9,3 +9,12 @@ feedparser
 
 # 記事HTMLから本文を抽出するためのライブラリ
 beautifulsoup4
+
+# Webアプリを作成するためのライブラリ
+streamlit
+
+# Googleスプレッドシートを操作するためのライブラリ
+gspread
+
+# Googleサービスアカウント認証用ライブラリ
+google-auth
