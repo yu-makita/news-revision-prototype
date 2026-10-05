@@ -1,4 +1,9 @@
 import streamlit as st
+from pages.login_page import show_login_page
+from pages.register_page import show_register_page
+from pages.home_page import show_home_page
+from pages.edit_profile_page import show_edit_profile_page
+from pages.avatar_page import show_avatar_page
 
 
 # ==========================================
@@ -22,10 +27,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-from pages.login_page import show_login_page
-from pages.register_page import show_register_page
-from pages.home_page import show_home_page
-from pages.edit_profile_page import show_edit_profile_page
 
 # ==========================================
 # アプリ全体のアクセントカラー
@@ -69,6 +70,9 @@ if "edit_profile" not in st.session_state:
 if "recommendation_result" not in st.session_state:
     st.session_state.recommendation_result = None
 
+if "avatar_mode" not in st.session_state:
+    st.session_state.avatar_mode = False
+
 
 # ==========================================
 # アプリタイトル
@@ -102,6 +106,10 @@ else:
     # 登録情報変更画面
     if st.session_state.edit_profile:
         show_edit_profile_page()
+
+    # 分身AI画面
+    elif st.session_state.avatar_mode:
+        show_avatar_page()
 
     # ホーム画面
     else:

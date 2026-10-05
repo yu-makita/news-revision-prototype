@@ -19,4 +19,5 @@ gspread
 # Googleサービスアカウント認証用ライブラリ
 google-auth
 
+
 groq

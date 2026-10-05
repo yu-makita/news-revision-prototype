@@ -550,3 +550,17 @@ def show_home_page():
             st.success(
                 "選択結果を保存しました。"
             )
+
+            # 選択したニュースを分身AI画面用に保持する
+            if not none_selected:
+
+                selected_news = next(
+                    news
+                    for news in all_news
+                    if news["news_id"] == selected_news_id
+                )
+
+                st.session_state.selected_news = selected_news
+                st.session_state.avatar_mode = True
+
+                st.rerun()
