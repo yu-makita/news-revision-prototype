@@ -13,10 +13,20 @@ SCOPES = [
 # Googleスプレッドシートへの接続を再利用する関数
 @st.cache_resource
 def get_spreadsheet():
-    credentials = Credentials.from_service_account_file(
-        "google_credentials.json",
-        scopes=SCOPES,
-    )
+
+    # Streamlit CloudではSecretsに保存した認証情報を使う
+    if "google_service_account" in st.secrets:
+        credentials = Credentials.from_service_account_info(
+            dict(st.secrets["google_service_account"]),
+            scopes=SCOPES,
+        )
+
+    # ローカルでは今まで通りJSONファイルを使う
+    else:
+        credentials = Credentials.from_service_account_file(
+            "google_credentials.json",
+            scopes=SCOPES,
+        )
 
     client = gspread.authorize(credentials)
 
