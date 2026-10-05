@@ -1,6 +1,7 @@
 import gspread
 import uuid
 import streamlit as st
+import os
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
@@ -14,17 +15,17 @@ SCOPES = [
 @st.cache_resource
 def get_spreadsheet():
 
-    # Streamlit CloudではSecretsに保存した認証情報を使う
-    if "google_service_account" in st.secrets:
-        credentials = Credentials.from_service_account_info(
-            dict(st.secrets["google_service_account"]),
+    # ローカルに認証ファイルがある場合はそれを使う
+    if os.path.exists("google_credentials.json"):
+        credentials = Credentials.from_service_account_file(
+            "google_credentials.json",
             scopes=SCOPES,
         )
 
-    # ローカルでは今まで通りJSONファイルを使う
+    # Streamlit CloudではSecretsを使う
     else:
-        credentials = Credentials.from_service_account_file(
-            "google_credentials.json",
+        credentials = Credentials.from_service_account_info(
+            dict(st.secrets["google_service_account"]),
             scopes=SCOPES,
         )
 
