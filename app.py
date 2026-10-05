@@ -1,10 +1,5 @@
 import streamlit as st
 
-from pages.login_page import show_login_page
-from pages.register_page import show_register_page
-from pages.home_page import show_home_page
-from pages.edit_profile_page import show_edit_profile_page
-
 
 # ==========================================
 # ページ設定
@@ -15,6 +10,14 @@ st.set_page_config(
     layout="wide",
 )
 
+# Streamlit Cloudでapp.pyが起動しているか確認する
+st.write("起動確認")
+
+
+from pages.login_page import show_login_page
+from pages.register_page import show_register_page
+from pages.home_page import show_home_page
+from pages.edit_profile_page import show_edit_profile_page
 
 # ==========================================
 # アプリ全体のアクセントカラー
