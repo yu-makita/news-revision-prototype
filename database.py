@@ -255,3 +255,82 @@ def save_session(
         row,
         value_input_option="RAW",
     )
+
+# ユーザーが過去に実際に選択したニュースを取得する関数
+def get_selected_news_history(user_id):
+    spreadsheet = get_spreadsheet()
+
+    sessions_sheet = spreadsheet.worksheet("sessions")
+    news_history_sheet = spreadsheet.worksheet("news_history")
+
+    # sessionsシートから、このユーザーが実際に選択したnews_idを取得する
+    session_records = sessions_sheet.get_all_records()
+
+    selected_records = []
+
+    for record in session_records:
+
+        saved_user_id = str(
+            record.get("user_id", "")
+        ).strip().upper()
+
+        if saved_user_id != user_id.strip().upper():
+            continue
+
+        # 「興味を持ったニュースはない」を選んだ回は除外する
+        none_selected = str(
+            record.get("none_selected", "")
+        ).strip().upper()
+
+        if none_selected == "TRUE":
+            continue
+
+        selected_news_id = str(
+            record.get("selected_news_id", "")
+        ).strip()
+
+        if not selected_news_id:
+            continue
+
+        selected_records.append({
+            "news_id": selected_news_id,
+            "selected_at": record.get("created_at"),
+            "session_id": record.get("session_id"),
+        })
+
+    # news_historyシートから記事情報を取得する
+    news_records = news_history_sheet.get_all_records()
+
+    news_by_id = {}
+
+    for record in news_records:
+
+        news_id = str(
+            record.get("news_id", "")
+        ).strip()
+
+        if news_id:
+            news_by_id[news_id] = record
+
+    # 選択履歴と記事情報を結合する
+    history = []
+
+    for selected in selected_records:
+
+        news = news_by_id.get(
+            selected["news_id"],
+            {},
+        )
+
+        history.append({
+            "news_id": selected["news_id"],
+            "selected_at": selected["selected_at"],
+            "session_id": selected["session_id"],
+            "title": news.get("title"),
+            "category": news.get("category"),
+            "source": news.get("source"),
+            "url": news.get("url"),
+        })
+
+    return history
+

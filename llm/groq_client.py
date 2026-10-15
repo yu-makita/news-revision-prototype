@@ -6,41 +6,75 @@ from groq import Groq
 
 load_dotenv()
 
-GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
+GROQ_MODEL = os.getenv(
+    "GROQ_MODEL",
+    "qwen/qwen3.8-27b",
+)
 
 
+# ==========================================
+# Groq APIを使ってLLMを呼び出す関数
+# ==========================================
 def call_llm(
     prompt: str,
     json_mode: bool = False,
     temperature: float = 0.3,
+    max_completion_tokens: int = 800,
 ) -> str:
-    """
-    Groq APIを使ってLLMを呼び出す。
-    """
 
-    api_key = os.getenv("GROQ_API_KEY")
+    api_key = os.getenv(
+        "GROQ_API_KEY"
+    )
 
     if not api_key:
         raise RuntimeError(
             "GROQ_API_KEY が設定されていません。"
         )
 
-    client = Groq(api_key=api_key)
-
-    response = client.chat.completions.create(
-    model=GROQ_MODEL,
-    messages=[
-        {
-            "role": "user",
-            "content": prompt,
-        }
-    ],
-    temperature=temperature,
-    reasoning_effort="none",
-    max_completion_tokens=800,
+    client = Groq(
+        api_key=api_key
     )
 
-    content = response.choices[0].message.content
+
+    # ==========================================
+    # APIに渡す設定を作成
+    # ==========================================
+    request_params = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+        "temperature": temperature,
+        "reasoning_effort": "none",
+        "max_completion_tokens": max_completion_tokens,
+    }
+
+
+    # ==========================================
+    # JSON形式が必要な場合
+    # ==========================================
+    if json_mode:
+        request_params["response_format"] = {
+            "type": "json_object"
+        }
+
+
+    # ==========================================
+    # Groq APIを呼び出す
+    # ==========================================
+    response = client.chat.completions.create(
+        **request_params
+    )
+
+    content = (
+        response
+        .choices[0]
+        .message
+        .content
+    )
 
     if not content:
         raise RuntimeError(
