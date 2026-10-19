@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import sys
+import time
+from batch_news_summarizer import prepare_news_summaries
 
 from llm import call_llm
 
@@ -20,7 +22,7 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8")
 
 
-DISPLAY_NEWS_COUNT = 10
+DISPLAY_NEWS_COUNT = 9
 SUMMARY_ARTICLE_TEXT_MAX_CHARS = 12000
 
 INTEREST_CHOICES = [
@@ -137,17 +139,20 @@ def format_user_profile_for_prompt(user_profile: dict) -> str:
     )
 
 
+# ニュース推薦用に各記事へ番号を付ける関数
 def _news_payload_for_ranking(news_list: list[dict]) -> list[dict]:
     payload = []
-    for news in news_list:
+
+    for number, news in enumerate(news_list, start=1):
         payload.append(
             {
-                "news_id": news.get("news_id"),
+                "number": number,
                 "category": news.get("category"),
                 "title": news.get("title"),
-                "summary": news.get("summary"),
+                "summary": news.get("ai_summary") or news.get("summary"),
             }
         )
+
     return payload
 
 
@@ -176,36 +181,38 @@ def _parse_json_text(text: str) -> dict:
     return data
 
 
+# AIが返した推薦番号を検証し、元のニュースIDに変換する関数
 def validate_recommendation_output(
     raw: dict,
     candidate_ids: list[str],
 ) -> dict:
-    candidate_set = set(candidate_ids)
-
-    recommended = raw.get("recommended_news_id")
+    number = raw.get("recommended_number")
     reason = raw.get("recommendation_reason")
 
-    if not isinstance(recommended, str) or not recommended.strip():
-        raise RecommendationError("recommended_news_id が空です。")
-
-    recommended_id = recommended.strip()
-
-    if recommended_id not in candidate_set:
+    # 1〜候補件数の整数であることを確認
+    if (
+        type(number) is not int
+        or not 1 <= number <= len(candidate_ids)
+    ):
         raise RecommendationError(
-            f"recommended_news_id が候補ニュースに存在しません: {recommended_id}"
+            f"推薦番号が不正です: {number}"
         )
 
     if not isinstance(reason, str) or not reason.strip():
-        raise RecommendationError("recommendation_reason が空です。")
+        raise RecommendationError(
+            "recommendation_reason が空です。"
+        )
+
+    # AIの番号をPython側でニュースIDに変換
+    recommended_id = candidate_ids[number - 1]
 
     return {
         "recommended_news_id": recommended_id,
         "recommendation_reason": reason.strip(),
     }
 
+# ニュース推薦用のプロンプトを作成する関数
 def _build_ranking_prompt(user_profile: dict, news_list: list[dict]) -> str:
-    candidate_ids = [str(news.get("news_id")) for news in news_list]
-
     news_json = json.dumps(
         _news_payload_for_ranking(news_list),
         ensure_ascii=False,
@@ -213,17 +220,17 @@ def _build_ranking_prompt(user_profile: dict, news_list: list[dict]) -> str:
     )
 
     return f"""あなたはニュース推薦システムです。
-与えられた10件の候補ニュースの中から、このユーザーが最も興味を持つ可能性が高い記事を1件だけ選んでください。
+与えられた{len(news_list)}件の候補ニュースの中から、このユーザーが最も興味を持つ可能性が高い記事を1件だけ選んでください。
 
 # 判断の方針
 - 年齢、性別、職業、居住地域、興味のある分野、Big Five、各ニュースの category / title / summary を総合的に見て判断する。
-- 「興味のある分野」と同じ category の記事を機械的に選ばない。分野は判断材料の一つとして扱う。
+- 「興味のある分野」と同じ category の記事を機械的に選ばない。
 - 性別や Big Five など単一の属性だけから興味を断定しない。
 - 未回答の項目は無理に補完しない。
 - Big Five はT得点（平均50、標準偏差10）として扱い、極端な解釈は避ける。
-- 候補ニュース10件を比較したうえで、最も興味を持つ可能性が高い1件を選ぶ。
-- 推薦理由は、なぜ他の候補よりそのニュースに興味を持つと判断したのかが分かるよう、簡潔な日本語で2〜4文程度にする。
-- 候補に存在しない news_id は絶対に使用しない。
+- 推薦理由は簡潔な日本語で2〜4文程度にする。
+- 候補ニュースに付けられた number の中から1つ選ぶ。
+- news_id は生成しない。
 
 # ユーザー情報
 {format_user_profile_for_prompt(user_profile)}
@@ -234,12 +241,11 @@ def _build_ranking_prompt(user_profile: dict, news_list: list[dict]) -> str:
 # 出力
 次のJSONだけを返してください。
 {{
-  "recommended_news_id": "最も興味を持つ可能性が高いニュースのnews_id",
+  "recommended_number": 1,
   "recommendation_reason": "そのニュースを選んだ理由"
 }}
 
-利用可能な news_id 一覧:
-{candidate_ids}
+recommended_number には、1から{len(news_list)}までの整数を指定してください。
 """
 
 
@@ -254,6 +260,7 @@ def _request_recommendation(
             prompt,
             json_mode=True,
             temperature=0.3,
+            max_completion_tokens=400,
         )
     except RecommendationError:
         raise
@@ -357,7 +364,6 @@ def recommend_news(
         selected_news_ids: 表示するニュースのnews_id一覧
         recommended_news_id: 最推薦のnews_id
         recommendation_reason: 最推薦の理由
-        article_summary: 最推薦記事の要約
     """
 
     profile = (
@@ -413,12 +419,23 @@ def recommend_news(
         _copy_news(news)
         for news in items[:display_count]
     ]
+    # 9記事の本文を取得し、AIで一括要約する
+    start = time.perf_counter()
+
+    prepare_news_summaries(selected_items)
+
+    print(f"【計測】本文取得＋一括要約：{time.perf_counter() - start:.2f}秒")
 
     # AIが表示候補から最推薦1件を選ぶ
+    start = time.perf_counter()
+
     ranking = _request_recommendation(
         profile,
         selected_items,
     )
+
+    print(f"【計測】ニュース推薦：{time.perf_counter() - start:.2f}秒")
+
 
     recommended_id = ranking[
         "recommended_news_id"
@@ -444,26 +461,7 @@ def recommend_news(
             f"推薦記事を元データに紐付けできませんでした: {recommended_id}"
         )
 
-    # 最推薦された1件だけ記事本文を取得する
-    try:
-        fetch_article_text_for_news(
-            recommended_news
-        )
 
-    except Exception as e:
-        print(
-            f"【警告】最推薦記事の本文取得に失敗しました: {e}",
-            file=sys.stderr,
-        )
-
-        recommended_news[
-            "article_text"
-        ] = None
-
-    # 最推薦1件だけAIで本文要約する
-    article_summary = summarize_article(
-        recommended_news
-    )
 
     reason = ranking[
         "recommendation_reason"
@@ -473,9 +471,6 @@ def recommend_news(
         "recommendation_reason"
     ] = reason
 
-    recommended_news[
-        "article_summary"
-    ] = article_summary
 
     # 今回表示するニュースのID一覧を作る
     selected_news_ids = [
@@ -487,7 +482,6 @@ def recommend_news(
         "selected_news_ids": selected_news_ids,
         "recommended_news_id": recommended_id,
         "recommendation_reason": reason,
-        "article_summary": article_summary,
         "recommended_news": recommended_news,
         "other_news": other_news,
     }
@@ -502,7 +496,7 @@ def display_recommendation_result(result: dict) -> None:
     print(f"配信元: {recommended.get('source')}")
     print(f"URL: {recommended.get('url')}")
     print(f"推薦理由: {result.get('recommendation_reason')}")
-    print(f"要約:\n{result.get('article_summary')}")
+    print(f"要約:\n{recommended.get('ai_summary') or recommended.get('summary')}")
     print()
 
     print("=== その他の表示候補 ===")

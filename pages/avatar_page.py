@@ -1,10 +1,6 @@
 import streamlit as st
 
-from opinion_generator import (
-    generate_article_summary,
-    generate_opinion_candidates,
-)
-
+from opinion_generator import generate_article_summary, generate_opinion_candidates
 
 # ==========================================
 # 分身AI画面を表示する関数
@@ -104,34 +100,17 @@ def show_avatar_page():
         st.session_state.opinion_candidates = None
 
 
-    # 要約がまだ生成されていなければ生成する
-    if not st.session_state.get(
-        "article_summary"
-    ):
-
+    # 選択した記事の詳細要約を生成する
+    if not st.session_state.get("article_summary"):
         try:
+            with st.spinner("記事の詳細要約を生成しています..."):
+                article_summary = generate_article_summary(selected_news)
 
-            with st.spinner(
-                "記事本文を読み込んでいます..."
-            ):
-
-                article_summary = (
-                    generate_article_summary(
-                        selected_news
-                    )
-                )
-
-            st.session_state.article_summary = (
-                article_summary
-            )
+            st.session_state.article_summary = article_summary
 
         except Exception as e:
-
-            st.error(
-                f"記事要約の生成に失敗しました：{e}"
-            )
+            st.error(f"記事要約の生成に失敗しました：{e}")
             return
-
 
     # ==========================================
     # 記事要約を表示

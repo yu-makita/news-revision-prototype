@@ -344,9 +344,9 @@ def show_home_page():
     )
 
     st.write(
-        result[
-            "article_summary"
-        ]
+        recommended.get("ai_summary")
+        or recommended.get("summary")
+        or "要約を取得できませんでした。"
     )
 
 
@@ -427,9 +427,7 @@ def show_home_page():
                         unsafe_allow_html=True,
                     )
 
-                    summary = news.get(
-                        "summary"
-                    )
+                    summary = news.get("ai_summary") or news.get("summary")
 
                     if summary:
 

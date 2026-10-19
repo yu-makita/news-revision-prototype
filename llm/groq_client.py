@@ -62,12 +62,35 @@ def call_llm(
         }
 
 
-    # ==========================================
-    # Groq APIを呼び出す
-    # ==========================================
-    response = client.chat.completions.create(
-        **request_params
+    # Groq API呼び出し全体の時間を計測する
+    import time
+
+    api_start = time.perf_counter()
+
+    response = client.chat.completions.create(**request_params)
+
+    print(
+        f"【Groq】API呼び出し実時間："
+        f"{time.perf_counter() - api_start:.2f}秒"
     )
+    # AIのトークン使用量を確認する
+    usage = response.usage
+
+    print(f"【Groq】モデル：{GROQ_MODEL}")
+    print(f"【Groq】入力トークン：{usage.prompt_tokens}")
+    print(f"【Groq】出力トークン：{usage.completion_tokens}")
+    print(f"【Groq】合計トークン：{usage.total_tokens}")
+
+    # Groq側の処理時間を確認する
+    timings = getattr(usage, "prompt_time", None)
+    completion_time = getattr(usage, "completion_time", None)
+    queue_time = getattr(usage, "queue_time", None)
+    total_time = getattr(usage, "total_time", None)
+
+    print(f"【Groq】入力処理時間：{timings}秒")
+    print(f"【Groq】出力生成時間：{completion_time}秒")
+    print(f"【Groq】待機時間：{queue_time}秒")
+    print(f"【Groq】サーバー処理時間：{total_time}秒")
 
     content = (
         response

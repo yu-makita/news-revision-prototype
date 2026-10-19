@@ -6,27 +6,20 @@ from llm import call_llm
 from news_fetcher import fetch_article_text_for_news
 
 
-# ==========================================
-# ニュース記事の本文を取得する関数
-# ==========================================
-def get_article_text(
-    news: dict,
-) -> str:
+# 保存済みの記事本文を優先して取得する関数
+def get_article_text(news: dict) -> str:
+    article_text = news.get("article_text")
 
-    news_with_text = fetch_article_text_for_news(
-        news.copy()
-    )
+    if isinstance(article_text, str) and article_text.strip():
+        return article_text.strip()
 
-    article_text = news_with_text.get(
-        "article_text"
-    )
+    news_with_text = fetch_article_text_for_news(news.copy())
+    article_text = news_with_text.get("article_text")
 
-    if not article_text:
-        raise RuntimeError(
-            "記事本文を取得できませんでした。"
-        )
+    if not isinstance(article_text, str) or not article_text.strip():
+        raise RuntimeError("記事本文を取得できませんでした。")
 
-    return article_text
+    return article_text.strip()
 
 
 # ==========================================
@@ -66,7 +59,7 @@ def generate_article_summary(
 - 記事全体の内容が分かるように、十分な情報量を含める。
 - 主要な出来事だけでなく、その背景、経緯、具体的な内容、今後の予定など、記事内の重要な情報をできるだけ落とさずまとめる。
 - ユーザーが元記事を読まなくても、ニュースの全体像を把握できる程度の要約にする。
-- 目安として10〜15文程度、500〜800字程度とする。
+- 目安として10〜15文程度、300〜400字程度とする。記事の重要な情報を簡潔にまとめる。
 - 記事本文またはRSS要約に書かれていない情報を追加しない。
 - 意見や評価を勝手に加えない。
 - 要約本文だけを返す。見出しや前置きは不要。
@@ -76,6 +69,7 @@ def generate_article_summary(
         prompt,
         json_mode=False,
         temperature=0.2,
+        max_completion_tokens=900,
     )
 
     if not summary:
