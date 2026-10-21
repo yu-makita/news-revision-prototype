@@ -1,4 +1,5 @@
 import gspread
+import json
 import uuid
 import streamlit as st
 import os
@@ -334,3 +335,67 @@ def get_selected_news_history(user_id):
 
     return history
 
+# ユーザーの意見選択・訂正履歴をGoogle Sheetsに保存する関数
+def save_correction(
+    session_id,
+    user_id,
+    news_id,
+    opinion_candidates,
+    selected_opinion_id,
+    selected_opinion_text,
+    correction_text,
+):
+    spreadsheet = get_spreadsheet()
+    sheet = spreadsheet.worksheet("corrections")
+
+    # 回答ごとに一意なIDを生成する
+    correction_id = str(uuid.uuid4())
+
+    # 回答日時を取得する
+    created_at = datetime.now().isoformat(
+        timespec="seconds"
+    )
+
+    # 意見候補をJSON文字列に変換する
+    opinion_candidates_json = json.dumps(
+        opinion_candidates,
+        ensure_ascii=False,
+    )
+
+    # 選択結果に応じて保存先の列を分ける
+    if selected_opinion_id == "none":
+        user_selected_index = ""
+        user_selected_opinion = ""
+        user_free_opinion = correction_text
+        correction_reason = ""
+    else:
+        user_selected_index = selected_opinion_id
+        user_selected_opinion = selected_opinion_text
+        user_free_opinion = ""
+        correction_reason = correction_text
+
+    row = [
+        correction_id,             # A
+        user_id,                   # B
+        session_id,                # C
+        news_id,                   # D
+        created_at,                # E
+        "",                        # F: ai_statement
+        opinion_candidates_json,   # G
+        "",                        # H: ai_predicted_index
+        "",                        # I: ai_predicted_opinion
+        "",                        # J: ai_styled_statement
+        user_selected_index,       # K
+        user_selected_opinion,     # L
+        user_free_opinion,         # M
+        correction_reason,         # N
+        "",                        # O: user_own_expression
+    ]
+
+    # Google Sheetsに1行追加する
+    sheet.append_row(
+        row,
+        value_input_option="RAW",
+    )
+
+    return correction_id
