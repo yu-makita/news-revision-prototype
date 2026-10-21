@@ -378,12 +378,46 @@ def predict_user_opinion(user_id: str, news: dict, opinion_candidates: dict) -> 
         if text:
             memory_texts.append(text)
 
+    
+    # 過去の意見履歴があるか確認する
     has_history = len(memory_texts) > 0
 
     if has_history:
         past_memories = "\n\n---\n\n".join(memory_texts)
     else:
         past_memories = "過去の意見履歴はありません。"
+
+    # 今回の記事に関連する価値観の評価・訂正履歴を検索する
+    feedback_results = search_memories(
+        user_id=user_id,
+        query_text=query_text,
+        memory_type="value_feedback",
+        top_k=5,
+    )
+
+    # Pineconeの検索結果から価値観の評価・訂正を取り出す
+    if hasattr(feedback_results, "to_dict"):
+        feedback_data = feedback_results.to_dict()
+    else:
+        feedback_data = dict(feedback_results)
+
+    feedback_hits = feedback_data.get("result", {}).get("hits", [])
+
+    feedback_texts = []
+
+    for hit in feedback_hits:
+        fields = hit.get("fields", {})
+        text = fields.get("text", "")
+
+        if text:
+            feedback_texts.append(text)
+
+    # 取得した評価・訂正履歴をプロンプト用に整理する
+    if feedback_texts:
+        past_feedback = "\n\n---\n\n".join(feedback_texts)
+    else:
+        past_feedback = "過去の価値観への評価・訂正履歴はありません。"
+
 
     
     # Google Sheetsからユーザーの基本情報を取得する
@@ -410,9 +444,10 @@ def predict_user_opinion(user_id: str, news: dict, opinion_candidates: dict) -> 
 
     # 過去の履歴から判断傾向の仮説を作り、意見を予測する
     
+
     prompt = f"""
 あなたは、ユーザーの考え方を再現する分身AIです。
-過去の回答から判断傾向を推測し、新しいニュースに対する意見を予測してください。
+過去の回答や基本情報から判断傾向を推測し、新しいニュースに対する意見を予測してください。
 
 【今回のニュース】
 タイトル：{title}
@@ -422,8 +457,12 @@ def predict_user_opinion(user_id: str, news: dict, opinion_candidates: dict) -> 
 【意見候補（1〜10）】
 {numbered_opinions}
 
-【過去の意見・訂正履歴】
+
+【過去の意見・訂正履歴（RAG検索結果）】
 {past_memories}
+
+【過去の価値観への評価・訂正履歴（RAG検索結果）】
+{past_feedback}
 
 【基本情報（補助情報）】
 {profile_text}
@@ -432,13 +471,47 @@ def predict_user_opinion(user_id: str, news: dict, opinion_candidates: dict) -> 
 以下の順番で考えてください。
 
 1. 判断傾向の仮説生成
-過去の意見・訂正履歴から、ユーザーが判断時に重視する価値観や基準を最大3つ推測する。
+ユーザーが判断時に重視する価値観や基準を最大3つ推測する。
+過去の意見・訂正履歴があれば、それを最も重視する。
 今回と異なる話題でも共通する判断基準がないか検討する。
+履歴が少ない場合は、基本情報やBig Fiveから暫定的な仮説を立ててもよい。
 
 2. 意見の予測
 推測した判断傾向を今回のニュースに当てはめ、
 10個の候補からユーザーが最も選びそうな意見を1つ選ぶ。
-その理由を、過去の回答と判断傾向の仮説に結びつけて説明する。
+その理由を、過去の回答や判断傾向の仮説に結びつけて説明する。
+
+
+【本人による価値観の評価・訂正の扱い方】
+過去の価値観への評価・訂正履歴には、
+AIが推測した仮説、それに対する本人の評価、本人による訂正・補足が含まれている。
+
+これらは本人の判断傾向を理解するための重要な情報である。
+
+- 「合っている」：
+  本人がその仮説を支持した事実として扱う。
+  ただし、他の話題にも必ず当てはまるとは限らない。
+
+- 「一部合っている」：
+  仮説の一部が支持されたことと、本人による訂正・補足の両方を判断材料にする。
+  訂正内容と矛盾する部分を、そのまま本人の価値観として採用しない。
+
+- 「違う」：
+  本人がその仮説を否定したこと自体を重要な判断材料にする。
+  さらに、本人がどのように訂正したかを重視する。
+  否定された仮説を、そのまま本人の価値観として扱わない。
+
+- 「判断できない」：
+  本人による支持・否定のどちらも確認されていない情報として扱う。
+  ただし、訂正・補足がある場合は、その内容も参考にする。
+
+【記憶の利用に関する注意】
+- RAGで取得した履歴は、今回のニュースに関連する過去の記憶の一部であり、全履歴ではない。
+- 本人が直接述べた意見・訂正と、AIが生成した仮説・分析を区別する。
+- AIが過去に生成した仮説や予測のずれの分析を、本人が明言した価値観として扱わない。
+- 本人の評価・訂正がある場合は、元のAI仮説よりも本人の回答を優先する。
+- 今回のニュースと過去の履歴の関連性を検討し、無理に判断傾向を当てはめない。
+
 
 【推測のルール】
 - 過去の実際の回答を最も重視する。
@@ -447,16 +520,25 @@ def predict_user_opinion(user_id: str, news: dict, opinion_candidates: dict) -> 
 - 過去の回答と基本情報が矛盾する場合は、実際の回答を優先する。
 - 少数の回答から価値観を断定せず、仮説として扱う。
 - 過去の回答と今回の話題の違いを考慮し、無理に共通点を作らない。
-- 過去の回答がない場合、判断傾向は空配列とし、意見は基本情報を参考に暫定的に予測する。
+- 過去の回答がない場合でも、基本情報から暫定的な判断傾向を推測してよい。
 - 根拠が弱い場合は、予測理由に不確実性を明記する。
+
+【判断傾向の仮説に関する重要ルール】
+- inferred_tendenciesには、ユーザーの価値観・判断基準・考え方についての具体的な仮説だけを含める。
+- 「過去の回答履歴がない」「情報が不足している」「判断傾向を推測できない」など、AIの分析状況を説明する文章は絶対に含めない。
+- 「履歴がないため推測が難しい」といった説明も、価値観の仮説として出力しない。
+- 各仮説は、ユーザー本人が「合っている・一部合っている・違う・判断できない」で評価できる内容にする。
+- 仮説は「〇〇を重視する傾向がある」「〇〇を判断基準とする可能性がある」など、具体的な判断傾向として表現する。
+- 仮説の数を無理に3つ揃える必要はない。具体的な仮説が生成できなければ空配列にする。
+- 情報不足や予測の不確実性について説明する必要がある場合は、inferred_tendenciesではなくprediction_reasonに記載する。
 
 【出力形式】
 以下のJSONのみを出力する。
 
 {{
     "inferred_tendencies": [
-        "判断傾向の仮説1",
-        "判断傾向の仮説2"
+        "ユーザーの具体的な判断傾向に関する仮説1",
+        "ユーザーの具体的な判断傾向に関する仮説2"
     ],
     "predicted_opinion_id": 1,
     "prediction_reason": "判断傾向と過去の回答を踏まえた予測理由"
@@ -464,6 +546,7 @@ def predict_user_opinion(user_id: str, news: dict, opinion_candidates: dict) -> 
 
 predicted_opinion_idは1〜10の整数とする。
 """
+
 
 
 
@@ -500,4 +583,5 @@ predicted_opinion_idは1〜10の整数とする。
         "prediction_reason": reason,
         "has_history": has_history,
         "retrieved_memory_count": len(memory_texts),
+        "retrieved_feedback_count": len(feedback_texts),
     }

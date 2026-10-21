@@ -44,24 +44,40 @@ def test_prediction():
         ],
     }
 
+    # P0002の過去の意見・価値観の評価履歴を使って予測する
     result = predict_user_opinion(
-        user_id="P0001",
+        user_id="P0002",
         news=news,
         opinion_candidates=opinion_candidates,
     )
 
-    print("\n【過去の意見履歴】")
-    print("履歴あり：", result["has_history"])
-    print("取得件数：", result["retrieved_memory_count"])
+    # RAGで取得した履歴の件数を確認する
+    print("\n【Pineconeから取得した過去の履歴】")
+    print("意見履歴あり：", result["has_history"])
+    print("意見・訂正履歴（correction）：", result["retrieved_memory_count"], "件")
+    print(
+        "価値観の評価・訂正履歴（value_feedback）：",
+        result["retrieved_feedback_count"],
+        "件",
+    )
 
+    # AIが推測した判断傾向を表示する
     print("\n【推測した判断傾向】")
-    for tendency in result["inferred_tendencies"]:
-        print("・", tendency)
 
+    tendencies = result["inferred_tendencies"]
+
+    if tendencies:
+        for i, tendency in enumerate(tendencies, start=1):
+            print(f"仮説{i}：{tendency}")
+    else:
+        print("判断傾向の仮説は生成されませんでした。")
+
+    # AIが予測した意見を表示する
     print("\n【予測した意見】")
     print("番号：", result["predicted_opinion_id"])
     print("内容：", result["predicted_opinion_text"])
 
+    # AIによる予測理由を表示する
     print("\n【予測理由】")
     print(result["prediction_reason"])
 

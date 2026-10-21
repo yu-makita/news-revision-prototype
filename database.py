@@ -336,14 +336,21 @@ def get_selected_news_history(user_id):
     return history
 
 # ユーザーの意見選択・訂正履歴をGoogle Sheetsに保存する関数
+
+# 本人の最終回答と分身AIの予測結果をGoogle Sheetsに保存する関数
 def save_correction(
     session_id,
     user_id,
     news_id,
     opinion_candidates,
+    prediction,
     selected_opinion_id,
     selected_opinion_text,
     correction_text,
+    ai_generated_opinion,
+    user_final_opinion,
+    ai_difference_reason,
+    user_final_difference_reason,
 ):
     spreadsheet = get_spreadsheet()
     sheet = spreadsheet.worksheet("corrections")
@@ -362,34 +369,45 @@ def save_correction(
         ensure_ascii=False,
     )
 
-    # 選択結果に応じて保存先の列を分ける
+    # 分身AIの予測結果を取得する
+    ai_predicted_index = str(
+        prediction.get("predicted_opinion_id", "")
+    )
+    ai_predicted_opinion = prediction.get(
+        "predicted_opinion_text", ""
+    )
+
+    # 「該当する意見がない」場合は番号と選択意見を空欄にする
     if selected_opinion_id == "none":
         user_selected_index = ""
         user_selected_opinion = ""
-        user_free_opinion = correction_text
-        correction_reason = ""
     else:
-        user_selected_index = selected_opinion_id
+        user_selected_index = str(selected_opinion_id)
         user_selected_opinion = selected_opinion_text
-        user_free_opinion = ""
-        correction_reason = correction_text
 
+    # AIの予測番号と本人の選択番号が一致したかを判定する
+    prediction_matched = (
+        ai_predicted_index == str(selected_opinion_id)
+    )
+
+    # 新しいcorrectionsシートのA～P列に対応する
     row = [
-        correction_id,             # A
-        user_id,                   # B
-        session_id,                # C
-        news_id,                   # D
-        created_at,                # E
-        "",                        # F: ai_statement
-        opinion_candidates_json,   # G
-        "",                        # H: ai_predicted_index
-        "",                        # I: ai_predicted_opinion
-        "",                        # J: ai_styled_statement
-        user_selected_index,       # K
-        user_selected_opinion,     # L
-        user_free_opinion,         # M
-        correction_reason,         # N
-        "",                        # O: user_own_expression
+        correction_id,                 # A
+        user_id,                       # B
+        session_id,                    # C
+        news_id,                       # D
+        created_at,                    # E
+        opinion_candidates_json,       # F
+        ai_predicted_index,            # G
+        ai_predicted_opinion,          # H
+        user_selected_index,           # I
+        user_selected_opinion,         # J
+        correction_text.strip(),       # K
+        ai_generated_opinion,          # L
+        user_final_opinion,            # M
+        ai_difference_reason,          # N
+        user_final_difference_reason,  # O
+        prediction_matched,            # P
     ]
 
     # Google Sheetsに1行追加する
@@ -399,3 +417,48 @@ def save_correction(
     )
 
     return correction_id
+
+
+# 価値観・判断傾向の仮説に対する本人の評価・訂正を保存する関数
+def save_value_feedback(
+    correction_id,
+    user_id,
+    feedback_items,
+):
+    spreadsheet = get_spreadsheet()
+    sheet = spreadsheet.worksheet("value_feedback")
+
+    # 評価日時を取得する
+    created_at = datetime.now().isoformat(
+        timespec="seconds"
+    )
+
+    rows = []
+
+    # 仮説ごとの評価をGoogle Sheetsの行データに変換する
+    for item in feedback_items:
+
+        feedback_id = str(uuid.uuid4())
+
+        row = [
+            feedback_id,                         # A: feedback_id
+            correction_id,                       # B: correction_id
+            user_id,                             # C: user_id
+            item["hypothesis_index"],            # D: hypothesis_index
+            item["ai_hypothesis"],               # E: ai_hypothesis
+            item["user_rating"],                 # F: user_rating
+            item.get("user_correction", ""),     # G: user_correction
+            created_at,                          # H: created_at
+        ]
+
+        rows.append(row)
+
+    # 評価対象の仮説がない場合は保存しない
+    if not rows:
+        return
+
+    # 複数の仮説をまとめて保存する
+    sheet.append_rows(
+        rows,
+        value_input_option="RAW",
+    )

@@ -118,3 +118,4 @@ def generate_review(
         "user_opinion": user_opinion,
         "difference_reason": difference_reason,
     }
+    
