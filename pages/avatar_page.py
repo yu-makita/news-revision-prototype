@@ -2,6 +2,7 @@ import streamlit as st
 
 from opinion_generator import generate_article_summary, generate_opinion_candidates
 from database import save_correction
+from pinecone_client import save_memory
 
 # ==========================================
 # 分身AI画面を表示する関数
@@ -335,6 +336,8 @@ def show_avatar_page():
                 else ""
             )
 
+
+  
             try:
                 # 意見選択・訂正履歴をGoogle Sheetsに保存する
                 correction_id = save_correction(
@@ -357,6 +360,52 @@ def show_avatar_page():
                 }
 
                 st.success("回答をGoogle Sheetsに保存しました。")
+
+                # 記事情報を取得する
+                article_title = selected_news.get("title", "")
+                article_summary = st.session_state.get("article_summary", "")
+                article_category = selected_news.get("category", "")
+
+                # Pineconeに保存する検索用テキストを作成する
+                memory_text = (
+                    "【記事の話題】\n"
+                    f"タイトル：{article_title}\n"
+                    f"カテゴリ：{article_category}\n\n"
+                    "【記事の中心争点】\n"
+                    f"{opinion_candidates.get('main_issue', '')}\n\n"
+                    "【記事の詳細要約】\n"
+                    f"{article_summary}\n\n"
+                    "【ユーザーが選択した意見】\n"
+                    f"{selected_opinion_text if selected_opinion_id != 'none' else '提示された意見に該当なし'}\n\n"
+                    "【ユーザーが入力した訂正・自由意見】\n"
+                    f"{correction_text.strip() if correction_text.strip() else '入力なし'}"
+                )
+
+                # Pineconeに保存するメタデータ
+                memory_metadata = {
+                    "correction_id": correction_id,
+                    "session_id": st.session_state.current_session_id,
+                    "news_id": news_id,
+                    "selected_opinion_id": str(selected_opinion_id),
+                }
+
+                try:
+                    # ログインユーザー専用Namespaceに保存する
+                    save_memory(
+                        memory_id=f"correction-{correction_id}",
+                        user_id=st.session_state.user_id,
+                        memory_type="correction",
+                        text=memory_text,
+                        metadata=memory_metadata,
+                    )
+
+                    st.success("回答をPineconeにも保存しました。")
+
+                except Exception as e:
+                    st.warning(
+                        f"Google Sheetsへの保存は成功しましたが、"
+                        f"Pineconeへの保存に失敗しました：{e}"
+                    )
 
             except Exception as e:
                 st.error(f"回答の保存に失敗しました：{e}")

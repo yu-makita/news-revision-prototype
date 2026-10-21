@@ -13,6 +13,7 @@ from news_recommender import (
     RecommendationError,
 )
 
+from pinecone_client import save_memory
 
 # ==========================================
 # ログイン後のホーム画面を表示する関数
@@ -549,16 +550,76 @@ def show_home_page():
                 "選択結果を保存しました。"
             )
 
-            # 選択したニュースを分身AI画面用に保持する
-            if not none_selected:
+           
+            # 提示された9件のニュースのタイトルを取得する
+            presented_titles = [
+                str(news.get("title", ""))
+                for news in all_news
+            ]
 
+            # Pineconeに保存するメタデータを作成する
+            memory_metadata = {
+                "session_id": st.session_state.current_session_id,
+                "recommended_news_id": recommended_news_id or "",
+                "selected_news_id": selected_news_id,
+                "none_selected": none_selected,
+                "presented_titles": presented_titles,
+            }
+
+            if none_selected:
+                # どのニュースも選ばなかった事実を記憶する
+                memory_text = (
+                    "【ユーザーの選択行動】\n"
+                    f"提示された{len(all_news)}件のニュースの中から、"
+                    "ユーザーはどの記事も選択しなかった。\n"
+                    "これは今回の提示記事群に対する非選択であり、"
+                    "各記事への興味がないと断定するものではない。\n\n"
+                    "【提示されたニュース】\n"
+                    + "\n".join(
+                        f"{i}. {title}"
+                        for i, title in enumerate(
+                            presented_titles, start=1
+                        )
+                    )
+                )
+
+            else:
+                # ユーザーが選択したニュースを取得する
                 selected_news = next(
                     news
                     for news in all_news
                     if news["news_id"] == selected_news_id
                 )
 
+                # 選択行動と記事内容を記憶する
+                memory_text = (
+                    "【ユーザーの選択行動】\n"
+                    f"提示された{len(all_news)}件のニュースの中から、"
+                    "ユーザーがこの記事を選択した。\n"
+                    "ただし、1回の選択だけで継続的な興味があるとは断定できない。\n\n"
+                    "【選択したニュース】\n"
+                    f"タイトル：{selected_news.get('title', '')}\n"
+                    f"カテゴリ：{selected_news.get('category', '')}\n"
+                    f"記事概要：{selected_news.get('summary', '')}"
+                )
+
+            try:
+                # ニュース選択履歴をPineconeに登録する
+                save_memory(
+                    memory_id=f"selection-{st.session_state.current_session_id}",
+                    user_id=st.session_state.user_id,
+                    memory_type="selection",
+                    text=memory_text,
+                    metadata=memory_metadata,
+                )
+
+            except Exception as e:
+                st.warning(
+                    f"Pineconeへの記憶登録に失敗しました：{e}"
+                )
+
+            # ニュースを選択した場合は分身AI画面に進む
+            if not none_selected:
                 st.session_state.selected_news = selected_news
                 st.session_state.avatar_mode = True
-
                 st.rerun()
