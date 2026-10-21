@@ -4,7 +4,8 @@ import json
 
 from llm import call_llm
 from news_fetcher import fetch_article_text_for_news
-
+from pinecone_client import search_memories
+from database import get_user
 
 # 保存済みの記事本文を優先して取得する関数
 def get_article_text(news: dict) -> str:
@@ -320,3 +321,183 @@ def generate_opinion_candidates(
         )
 
     return result
+
+
+
+# 過去の意見履歴から判断傾向を推測し、今回の意見を予測する関数
+def predict_user_opinion(user_id: str, news: dict, opinion_candidates: dict) -> dict:
+    title = news.get("title", "")
+    summary = news.get("summary", "")
+    main_issue = opinion_candidates.get("main_issue", "")
+
+    gradient_opinions = opinion_candidates.get("gradient_opinions", [])
+    alternative_perspectives = opinion_candidates.get("alternative_perspectives", [])
+
+    if len(gradient_opinions) != 7 or len(alternative_perspectives) != 3:
+        raise ValueError("意見候補が10個揃っていません。")
+
+    # 10個の意見候補を番号付きで整理する
+    opinions = list(gradient_opinions)
+
+    for item in alternative_perspectives:
+        opinions.append(item["opinion"])
+
+    numbered_opinions = "\n".join(
+        f"{i}. {opinion}"
+        for i, opinion in enumerate(opinions, start=1)
+    )
+
+    # 今回の記事と争点に関連する過去の意見を検索する
+    query_text = (
+        f"記事タイトル：{title}\n"
+        f"記事概要：{summary}\n"
+        f"中心争点：{main_issue}"
+    )
+
+    search_results = search_memories(
+        user_id=user_id,
+        query_text=query_text,
+        memory_type="correction",
+        top_k=5,
+    )
+
+    # Pineconeの検索結果から記憶の文章を取り出す
+    if hasattr(search_results, "to_dict"):
+        search_data = search_results.to_dict()
+    else:
+        search_data = dict(search_results)
+
+    hits = search_data.get("result", {}).get("hits", [])
+
+    memory_texts = []
+
+    for hit in hits:
+        fields = hit.get("fields", {})
+        text = fields.get("text", "")
+
+        if text:
+            memory_texts.append(text)
+
+    has_history = len(memory_texts) > 0
+
+    if has_history:
+        past_memories = "\n\n---\n\n".join(memory_texts)
+    else:
+        past_memories = "過去の意見履歴はありません。"
+
+    
+    # Google Sheetsからユーザーの基本情報を取得する
+    user_profile = get_user(user_id)
+
+    if user_profile is None:
+        profile_text = "基本情報は登録されていません。"
+    else:
+        big5 = user_profile.get("big5", {})
+
+        profile_text = (
+            f"年齢：{user_profile.get('age')}\n"
+            f"職業：{user_profile.get('occupation')}\n"
+            f"居住都道府県：{user_profile.get('prefecture')}\n"
+            f"興味・関心：{', '.join(user_profile.get('interests', []))}\n"
+            "Big Five（登録されたスコア）：\n"
+            f"外向性：{big5.get('extraversion')}\n"
+            f"協調性：{big5.get('agreeableness')}\n"
+            f"誠実性：{big5.get('conscientiousness')}\n"
+            f"情緒性：{big5.get('emotionality')}\n"
+            f"開放性・創造性：{big5.get('creativity')}"
+        )
+
+
+    # 過去の履歴から判断傾向の仮説を作り、意見を予測する
+    
+    prompt = f"""
+あなたは、ユーザーの考え方を再現する分身AIです。
+過去の回答から判断傾向を推測し、新しいニュースに対する意見を予測してください。
+
+【今回のニュース】
+タイトル：{title}
+概要：{summary}
+中心争点：{main_issue}
+
+【意見候補（1〜10）】
+{numbered_opinions}
+
+【過去の意見・訂正履歴】
+{past_memories}
+
+【基本情報（補助情報）】
+{profile_text}
+
+【タスク】
+以下の順番で考えてください。
+
+1. 判断傾向の仮説生成
+過去の意見・訂正履歴から、ユーザーが判断時に重視する価値観や基準を最大3つ推測する。
+今回と異なる話題でも共通する判断基準がないか検討する。
+
+2. 意見の予測
+推測した判断傾向を今回のニュースに当てはめ、
+10個の候補からユーザーが最も選びそうな意見を1つ選ぶ。
+その理由を、過去の回答と判断傾向の仮説に結びつけて説明する。
+
+【推測のルール】
+- 過去の実際の回答を最も重視する。
+- Big Fiveや職業・関心などの基本情報は、関連する場合のみ補助的に使う。
+- Big Fiveのスコアだけで価値観や賛否を決めつけない。
+- 過去の回答と基本情報が矛盾する場合は、実際の回答を優先する。
+- 少数の回答から価値観を断定せず、仮説として扱う。
+- 過去の回答と今回の話題の違いを考慮し、無理に共通点を作らない。
+- 過去の回答がない場合、判断傾向は空配列とし、意見は基本情報を参考に暫定的に予測する。
+- 根拠が弱い場合は、予測理由に不確実性を明記する。
+
+【出力形式】
+以下のJSONのみを出力する。
+
+{{
+    "inferred_tendencies": [
+        "判断傾向の仮説1",
+        "判断傾向の仮説2"
+    ],
+    "predicted_opinion_id": 1,
+    "prediction_reason": "判断傾向と過去の回答を踏まえた予測理由"
+}}
+
+predicted_opinion_idは1〜10の整数とする。
+"""
+
+
+
+    response = call_llm(
+        prompt,
+        json_mode=True,
+        temperature=0.3,
+    )
+
+    try:
+        result = json.loads(response)
+    except (json.JSONDecodeError, TypeError) as e:
+        raise RuntimeError("意見予測のJSON解析に失敗しました。") from e
+
+    try:
+        predicted_id = int(result["predicted_opinion_id"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise RuntimeError("予測した意見番号が不正です。") from e
+
+    if not 1 <= predicted_id <= 10:
+        raise RuntimeError("予測した意見番号が1〜10の範囲外です。")
+
+    tendencies = result.get("inferred_tendencies", [])
+    reason = result.get("prediction_reason", "")
+
+    if not isinstance(tendencies, list) or not isinstance(reason, str) or not reason.strip():
+        raise RuntimeError("意見予測の出力形式が不正です。")
+
+    # 後続の画面表示や保存処理で使える形にする
+    return {
+        "predicted_opinion_id": str(predicted_id),
+        "predicted_opinion_text": opinions[predicted_id - 1],
+        "inferred_tendencies": tendencies,
+        "prediction_reason": reason,
+        "has_history": has_history,
+        "retrieved_memory_count": len(memory_texts),
+    }

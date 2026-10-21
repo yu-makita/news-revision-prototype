@@ -1,6 +1,10 @@
 import streamlit as st
 
-from opinion_generator import generate_article_summary, generate_opinion_candidates
+from opinion_generator import (
+    generate_article_summary,
+    generate_opinion_candidates,
+    predict_user_opinion,
+)
 from database import save_correction
 from pinecone_client import save_memory
 
@@ -28,6 +32,7 @@ def show_avatar_page():
         st.session_state.article_summary = None
         st.session_state.summary_news_id = None
         st.session_state.opinion_candidates = None
+        st.session_state.opinion_prediction = None
         st.session_state.pop("opinion_response", None)
 
         st.rerun()
@@ -171,16 +176,35 @@ def show_avatar_page():
                     )
                 )
 
+            
             st.session_state.opinion_candidates = (
                 opinion_candidates
             )
+
+            # 過去の意見履歴から判断傾向と意見を予測する
+            st.session_state.opinion_prediction = None
+
+            try:
+                with st.spinner("分身AIがあなたの価値観と意見を予測しています..."):
+                    prediction = predict_user_opinion(
+                        user_id=st.session_state.user_id,
+                        news=selected_news,
+                        opinion_candidates=opinion_candidates,
+                    )
+
+                st.session_state.opinion_prediction = prediction
+
+            except Exception as prediction_error:
+                st.warning(
+                    f"意見候補は生成できましたが、"
+                    f"分身AIの予測に失敗しました：{prediction_error}"
+                )
 
         except Exception as e:
 
             st.error(
                 f"意見候補の生成に失敗しました：{e}"
             )
-
 
     # ==========================================
     # 生成された意見候補を取得
@@ -248,7 +272,44 @@ def show_avatar_page():
             f"{item.get('opinion')}"
         )
 
-        # ==========================================
+
+    
+    # ==========================================
+    # 分身AIが推測した価値観と予測意見を表示
+    # ==========================================
+    prediction = st.session_state.get("opinion_prediction")
+
+    if prediction is not None:
+        st.divider()
+        st.subheader("分身AIによるあなたの意見の予測")
+
+        st.write("**推測した価値観・判断傾向（仮説）**")
+
+        tendencies = prediction.get("inferred_tendencies", [])
+
+        if tendencies:
+            for index, tendency in enumerate(tendencies, start=1):
+                st.write(f"{index}. {tendency}")
+        else:
+            st.info("過去の意見履歴がないため、価値観を推測できませんでした。")
+
+        st.write("**あなたが選ぶと予測した意見**")
+        st.write(
+            f"**意見{prediction['predicted_opinion_id']}：**"
+            f"{prediction['predicted_opinion_text']}"
+        )
+
+        st.write("**予測理由**")
+        st.write(prediction["prediction_reason"])
+
+        st.caption(
+            "これらは過去の回答から推測した仮説であり、"
+            "あなたの実際の価値観や意見を確定したものではありません。"
+        )
+
+
+
+    # ==========================================
     # 意見の選択・訂正
     # ==========================================
     st.divider()
