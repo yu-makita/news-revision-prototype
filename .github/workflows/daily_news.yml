@@ -1,0 +1,63 @@
+name: Daily News Batch
+
+on:
+  schedule:
+    # 毎朝6:00 JST (前日21:00 UTC)
+    - cron: '0 21 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (スプレッドシートへの保存をスキップ)'
+        type: boolean
+        required: false
+        default: false
+      batch_date:
+        description: '対象日付 (YYYY-MM-DD、省略時は本日)'
+        type: string
+        required: false
+        default: ''
+
+jobs:
+  run-batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Set up Google Service Account Credentials
+        run: |
+          echo "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > google_credentials.json
+
+      - name: Run Daily News Batch
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER || secrets.LLM_PROVIDER || 'gemini' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL || 'gemini-3.5-flash' }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ -n "${{ inputs.batch_date }}" ]; then
+            ARGS="$ARGS --batch-date ${{ inputs.batch_date }}"
+          fi
+          python daily_news_batch.py $ARGS
+
+      - name: Cleanup credentials
+        if: always()
+        run: |
+          rm -f google_credentials.json
