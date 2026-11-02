@@ -1,7 +1,6 @@
 import streamlit as st
 
 from opinion_generator import (
-    generate_article_summary,
     generate_opinion_candidates,
     predict_user_opinion,
 )
@@ -109,14 +108,14 @@ def show_avatar_page():
 
 
     # ==========================================
-    # 記事要約を生成
+    # 記事要約を取得
     # ==========================================
     news_id = selected_news.get(
         "news_id"
     )
 
     # 別の記事を選んだ場合は、
-    # 前の記事の要約を使用しない
+    # 前の記事の情報をリセットする
     if (
         st.session_state.get(
             "summary_news_id"
@@ -133,17 +132,13 @@ def show_avatar_page():
         st.session_state.pop("opinion_response", None)
 
 
-    # 選択した記事の詳細要約を生成する
-    if not st.session_state.get("article_summary"):
-        try:
-            with st.spinner("記事の詳細要約を生成しています..."):
-                article_summary = generate_article_summary(selected_news)
-
-            st.session_state.article_summary = article_summary
-
-        except Exception as e:
-            st.error(f"記事要約の生成に失敗しました：{e}")
-            return
+    # ニュース一覧ページで表示したものと同じ要約を使用する
+    article_summary = (
+        selected_news.get("ai_summary")
+        or selected_news.get("summary")
+        or "要約を取得できませんでした。"
+    )
+    st.session_state.article_summary = article_summary
 
     # ==========================================
     # 記事要約を表示

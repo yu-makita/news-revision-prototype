@@ -1,3 +1,4 @@
+import random
 import streamlit as st
 
 from database import (
@@ -6,14 +7,111 @@ from database import (
     save_news_history,
     generate_session_id,
     save_session,
+    get_daily_news,
 )
 
 from news_recommender import (
-    recommend_news,
+    recommend_from_saved_news,
     RecommendationError,
 )
 
 from pinecone_client import save_memory
+
+TARGET_CATEGORIES = [
+    "国内",
+    "国際",
+    "経済",
+    "エンタメ",
+    "スポーツ",
+    "IT",
+    "科学",
+    "ライフ",
+    "地域",
+]
+
+
+# ==========================================
+# 保存済みニュースから偏りを抑えて10件抽出する関数
+# ==========================================
+def select_balanced_10_news(
+    daily_news: list[dict],
+    seen_news_ids: set[str],
+) -> list[dict]:
+    """
+    保存済みニュース群から10件を抽出する。
+    - ユーザーが過去に表示された記事は優先的に除外
+    - 原則として9カテゴリから各1件ずつ選出（計9件）
+    - 残り1件を未選出記事からランダムに選出（計10件）
+    - 未表示記事が不足する場合のみ、表示済み記事から補填する
+    """
+    # カテゴリごとに記事を分類
+    news_by_category: dict[str, list[dict]] = {}
+    for news in daily_news:
+        cat = str(news.get("category", "")).strip() or "その他"
+        news_by_category.setdefault(cat, []).append(news)
+
+    selected: list[dict] = []
+    selected_ids: set[str] = set()
+
+    # 1. 9カテゴリから各1件ずつ選出（未表示優先）
+    for cat in TARGET_CATEGORIES:
+        cat_items = news_by_category.get(cat, [])
+        if not cat_items:
+            continue
+
+        unseen_items = [
+            n for n in cat_items
+            if str(n.get("news_id")) not in seen_news_ids
+        ]
+        seen_items = [
+            n for n in cat_items
+            if str(n.get("news_id")) in seen_news_ids
+        ]
+
+        # 未表示があれば優先、なければ表示済みから選出
+        candidates = unseen_items if unseen_items else seen_items
+        available = [
+            n for n in candidates
+            if str(n.get("news_id")) not in selected_ids
+        ]
+        if not available:
+            available = [
+                n for n in cat_items
+                if str(n.get("news_id")) not in selected_ids
+            ]
+
+        if available:
+            picked = random.choice(available)
+            selected.append(picked)
+            selected_ids.add(str(picked.get("news_id")))
+
+    # 2. 残り（10件に達するまで）を未選出の全記事から選出（未表示優先）
+    remaining_all = [
+        n for n in daily_news
+        if str(n.get("news_id")) not in selected_ids
+    ]
+
+    while len(selected) < 10 and remaining_all:
+        unseen_remaining = [
+            n for n in remaining_all
+            if str(n.get("news_id")) not in seen_news_ids
+        ]
+        if unseen_remaining:
+            picked = random.choice(unseen_remaining)
+        else:
+            picked = random.choice(remaining_all)
+
+        selected.append(picked)
+        selected_ids.add(str(picked.get("news_id")))
+        remaining_all = [
+            n for n in daily_news
+            if str(n.get("news_id")) not in selected_ids
+        ]
+
+    # 順序をランダムにシャッフル
+    random.shuffle(selected)
+    return selected
+
 
 # ==========================================
 # ログイン後のホーム画面を表示する関数
@@ -187,7 +285,7 @@ def show_home_page():
 
 
     # ==========================================
-    # ニュース推薦
+    # ニュース推薦ボタン
     # ==========================================
     if st.button(
         "ニュースを取得・推薦する",
@@ -195,45 +293,56 @@ def show_home_page():
     ):
 
         try:
-
             with st.spinner(
-                "ニュースを取得して、"
-                "あなたに合いそうな記事を選んでいます..."
+                "保存済みのニュースから候補を選び、"
+                "あなたに合いそうな記事を分析しています..."
             ):
 
-                # このユーザーが過去に表示された
-                # ニュースIDを取得
-                seen_news_ids = (
-                    get_seen_news_ids(
-                        st.session_state.user_id
+                # 1. daily_news シートから保存済み最新ニュースを取得
+                daily_news_records = get_daily_news()
+
+                # 10件未満の場合はエラー表示
+                if len(daily_news_records) < 10:
+                    st.error(
+                        f"表示可能なニュースが不足しています（取得件数: {len(daily_news_records)}件、必要件数: 10件）。"
+                        "毎朝の事前バッチ処理が正常に完了しているか確認してください。"
                     )
+                    return
+
+                # 2. このユーザーが過去に表示されたニュースIDを取得
+                seen_news_ids = get_seen_news_ids(
+                    st.session_state.user_id
                 )
 
-                # 既出ニュースを除外して
-                # ニュース推薦を実行
-                result = recommend_news(
-                    user_profile=current_user,
+                # 3. 9カテゴリ各1件 + ランダム1件（計10件、未表示優先）を抽出
+                candidate_10_news = select_balanced_10_news(
+                    daily_news=daily_news_records,
                     seen_news_ids=seen_news_ids,
                 )
 
-                # 今回ユーザーに表示する
-                # ニュース10件をまとめる
+                if len(candidate_10_news) < 10:
+                    st.error("10件のニュースを抽出できませんでした。")
+                    return
+
+                # 4. 抽出した10件について、既存のAI推薦ロジック（Pinecone RAG + LLM）を実行
+                # ※ ニュース取得・本文取得・AI要約は実行せず、保存済みの内容を入力
+                result = recommend_from_saved_news(
+                    news_list=candidate_10_news,
+                    user_profile=current_user,
+                    user_id=st.session_state.user_id,
+                )
+
+                # 5. 今回ユーザーに表示するニュース10件をまとめる
                 displayed_news = [
-                    result[
-                        "recommended_news"
-                    ],
-                    *result[
-                        "other_news"
-                    ],
+                    result["recommended_news"],
+                    *result["other_news"],
                 ]
 
-                # 今回の推薦を識別するセッションIDを生成する
+                # 6. 今回の推薦を識別するセッションIDを生成する
                 session_id = generate_session_id()
-
-                # ユーザーの選択確定までセッションIDを保持する
                 st.session_state.current_session_id = session_id
 
-                # 今回表示する9件をニュース履歴に保存する
+                # 7. 今回表示する10件をニュース履歴（news_history）に保存する
                 save_news_history(
                     st.session_state.user_id,
                     displayed_news,
@@ -241,22 +350,15 @@ def show_home_page():
                 )
 
             # 推薦結果を画面表示用に保存
-            st.session_state.recommendation_result = (
-                result
-            )
-
-            st.success(
-                "推薦が完了しました。"
-            )
+            st.session_state.recommendation_result = result
+            st.success("推薦が完了しました。")
 
         except RecommendationError as e:
-
             st.error(
                 f"推薦処理でエラーが発生しました：{e}"
             )
 
         except Exception as e:
-
             st.error(
                 f"予期せぬエラーが発生しました：{e}"
             )
@@ -265,18 +367,17 @@ def show_home_page():
     # ==========================================
     # 保存されている推薦結果を取得
     # ==========================================
-    result = (
-        st.session_state.recommendation_result
+    result = st.session_state.get(
+        "recommendation_result"
     )
 
-    # 推薦結果がまだなければ、
-    # ここでホーム画面の描画を終了
+    # 推薦結果がまだなければ、ここでホーム画面の描画を終了
     if result is None:
         return
 
 
     # ==========================================
-    # 最推薦ニュース
+    # 最推薦ニュース（画面上部）
     # ==========================================
     recommended = result[
         "recommended_news"
@@ -352,7 +453,7 @@ def show_home_page():
 
 
     # ==========================================
-    # その他のニュース
+    # その他のニュース（3列×3行のカード形式）
     # ==========================================
     st.divider()
 
@@ -369,7 +470,6 @@ def show_home_page():
         len(other_news),
         3,
     ):
-
         cols = st.columns(3)
 
         for col_index, news in enumerate(
@@ -377,7 +477,6 @@ def show_home_page():
                 row_start:row_start + 3
             ]
         ):
-
             index = (
                 row_start
                 + col_index
@@ -385,11 +484,9 @@ def show_home_page():
             )
 
             with cols[col_index]:
-
                 with st.container(
                     border=True
                 ):
-
                     st.caption(
                         news.get(
                             "category"
@@ -397,11 +494,11 @@ def show_home_page():
                         or "カテゴリ不明"
                     )
 
-                    title = news.get(
+                    card_title = news.get(
                         "title"
                     )
 
-                    url = news.get(
+                    card_url = news.get(
                         "url"
                     )
 
@@ -414,30 +511,30 @@ def show_home_page():
                             margin-bottom: 12px;
                         ">
                             <a
-                                href="{url}"
+                                href="{card_url}"
                                 target="_blank"
                                 style="
                                     color: inherit;
                                     text-decoration: none;
                                 "
                             >
-                                {index}. 「{title}」
+                                {index}. 「{card_title}」
                             </a>
                         </div>
                         """,
                         unsafe_allow_html=True,
                     )
 
-                    summary = news.get("ai_summary") or news.get("summary")
+                    summary = (
+                        news.get("ai_summary")
+                        or news.get("summary")
+                    )
 
                     if summary:
-
                         st.write(
                             summary
                         )
-
                     else:
-
                         st.caption(
                             "概要を取得できませんでした。"
                         )
@@ -452,7 +549,7 @@ def show_home_page():
         "最も興味を持ったニュースを選んでください"
     )
 
-    # おすすめ1件とその他のニュースをまとめる
+    # おすすめ1件とその他のニュースをまとめる（計10件）
     all_news = [
         recommended,
         *other_news,
@@ -462,7 +559,6 @@ def show_home_page():
         f"上の{len(all_news)}件のニュースの中から、"
         "あなたが実際に最も興味を持ったニュースを1つ選んでください。"
     )
-
 
     # ==========================================
     # ニュースまたは「該当なし」を選択するフォーム
@@ -474,12 +570,9 @@ def show_home_page():
         for news in all_news
     ] + [NONE_SELECTED_VALUE]
 
-    # 選択中の操作では再実行せず、
-    # 「選択を確定」を押したときだけ送信する
     with st.form(
         "news_selection_form"
     ):
-
         selected_value = st.radio(
             "ニュースを選択",
             options=selection_options,
@@ -502,7 +595,7 @@ def show_home_page():
 
 
     # ==========================================
-    # 選択結果をsessionsシートに保存する
+    # 選択結果をsessionsシートおよびPineconeに保存する
     # ==========================================
     if submitted:
 
@@ -519,7 +612,6 @@ def show_home_page():
             )
 
         else:
-
             # 「興味を持ったニュースはない」が選択されたか判定する
             none_selected = (
                 selected_value == NONE_SELECTED_VALUE
@@ -550,8 +642,7 @@ def show_home_page():
                 "選択結果を保存しました。"
             )
 
-           
-            # 提示された9件のニュースのタイトルを取得する
+            # 提示された10件のニュースのタイトルを取得する
             presented_titles = [
                 str(news.get("title", ""))
                 for news in all_news
@@ -591,6 +682,12 @@ def show_home_page():
                     if news["news_id"] == selected_news_id
                 )
 
+                summary_text = (
+                    selected_news.get("ai_summary")
+                    or selected_news.get("summary")
+                    or ""
+                )
+
                 # 選択行動と記事内容を記憶する
                 memory_text = (
                     "【ユーザーの選択行動】\n"
@@ -600,7 +697,7 @@ def show_home_page():
                     "【選択したニュース】\n"
                     f"タイトル：{selected_news.get('title', '')}\n"
                     f"カテゴリ：{selected_news.get('category', '')}\n"
-                    f"記事概要：{selected_news.get('summary', '')}"
+                    f"記事概要：{summary_text}"
                 )
 
             try:

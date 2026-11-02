@@ -11,6 +11,7 @@ import time
 from batch_news_summarizer import prepare_news_summaries
 
 from llm import call_llm
+from pinecone_client import search_memories
 
 from news_fetcher import (
     fetch_article_text_for_news,
@@ -211,56 +212,154 @@ def validate_recommendation_output(
         "recommendation_reason": reason.strip(),
     }
 
+
+
+# 今回のニュース候補に関連する過去の選択履歴をRAGで取得する関数
+def retrieve_recommendation_memories(
+    user_id: str,
+    news_list: list[dict],
+) -> str:
+    # 今回の候補ニュースを検索クエリにまとめる
+    query_parts = []
+
+    for news in news_list:
+        query_parts.append(
+            f"カテゴリ：{news.get('category', '')}\n"
+            f"タイトル：{news.get('title', '')}\n"
+            f"概要：{news.get('ai_summary') or news.get('summary') or ''}"
+        )
+
+    query_text = "\n\n".join(query_parts)
+
+    # 過去のニュース選択履歴を検索する
+    search_results = search_memories(
+        user_id=user_id,
+        query_text=query_text,
+        memory_type="selection",
+        top_k=5,
+    )
+
+    # Pineconeの検索結果を辞書に変換する
+    if hasattr(search_results, "to_dict"):
+        search_data = search_results.to_dict()
+    else:
+        search_data = dict(search_results)
+
+    hits = search_data.get("result", {}).get("hits", [])
+
+    memory_texts = []
+
+    for hit in hits:
+        fields = hit.get("fields", {})
+        text = fields.get("text", "")
+
+        if text:
+            memory_texts.append(text)
+
+    # 過去の選択履歴がない場合
+    if not memory_texts:
+        return "過去のニュース選択履歴はありません。"
+
+    # 取得した記憶をプロンプトに渡せる形にする
+    return "\n\n---\n\n".join(memory_texts)
+
+
+
 # ニュース推薦用のプロンプトを作成する関数
-def _build_ranking_prompt(user_profile: dict, news_list: list[dict]) -> str:
+def _build_ranking_prompt(
+    user_profile: dict,
+    news_list: list[dict],
+    past_memories: str,
+) -> str:
     news_json = json.dumps(
         _news_payload_for_ranking(news_list),
         ensure_ascii=False,
         separators=(",", ":"),
     )
 
-    return f"""あなたはニュース推薦システムです。
-与えられた{len(news_list)}件の候補ニュースの中から、このユーザーが最も興味を持つ可能性が高い記事を1件だけ選んでください。
+    
+    return f"""
+あなたは、ユーザーの興味・関心を推測するニュース推薦AIです。
+ユーザーの基本情報と過去のニュース選択履歴をもとに、
+{len(news_list)}件の候補ニュースから、最も読みたいと思う可能性が高い記事を1件推薦してください。
 
-# 判断の方針
-- 年齢、性別、職業、居住地域、興味のある分野、Big Five、各ニュースの category / title / summary を総合的に見て判断する。
-- 「興味のある分野」と同じ category の記事を機械的に選ばない。
-- 性別や Big Five など単一の属性だけから興味を断定しない。
-- 未回答の項目は無理に補完しない。
-- Big Five はT得点（平均50、標準偏差10）として扱い、極端な解釈は避ける。
-- 推薦理由は簡潔な日本語で2〜4文程度にする。
-- 候補ニュースに付けられた number の中から1つ選ぶ。
-- news_id は生成しない。
-
-# ユーザー情報
+【ユーザーの基本情報】
 {format_user_profile_for_prompt(user_profile)}
 
-# 候補ニュース
+【過去のニュース選択履歴（RAG検索結果）】
+{past_memories}
+
+【今回の候補ニュース】
 {news_json}
 
-# 出力
-次のJSONだけを返してください。
+【タスク】
+以下の順番で判断してください。
+
+1. ユーザーの興味・関心の推測
+過去のニュース選択履歴から、ユーザーが関心を示した話題や記事の特徴を推測する。
+単なるカテゴリだけでなく、記事の具体的な内容やテーマにも注目する。
+基本情報（興味のある分野、職業、居住地域、年齢、Big Fiveなど）も補助的に考慮する。
+
+2. 候補ニュースの比較
+今回の候補ニュースをそれぞれ確認し、
+推測した興味・関心との関連性を比較する。
+過去に選択した記事とカテゴリが異なっていても、
+内容やテーマに共通点があれば考慮する。
+
+3. 最推薦ニュースの決定
+ユーザーが最も興味を持ち、実際に読みたいと思う可能性が高い記事を1件選ぶ。
+その記事を選んだ理由を、過去の選択履歴や基本情報との関連性から説明する。
+
+【推測・推薦のルール】
+- 過去の実際の選択行動を、基本情報からの推測よりも優先する。
+- 過去の選択履歴はRAGで取得した一部の記憶であり、ユーザーの全履歴ではない。
+- 選択した記事は興味・関心の手掛かりとするが、1回の選択だけで継続的な関心があるとは断定しない。
+- どの記事も選択しなかった履歴は、その提示記事群に対する非選択として扱い、個々の記事や分野への無関心とは断定しない。
+- 過去の選択履歴と今回の候補ニュースの関連性が弱い場合は、無理に共通点を作らない。
+- 興味のある分野と同じカテゴリの記事を機械的に推薦せず、具体的な内容を比較する。
+- 年齢、性別、職業、居住地域、Big Fiveなどの単一の属性だけで興味を決めつけない。
+- Big FiveはT得点（平均50、標準偏差10）として扱い、極端な解釈を避ける。
+- 未回答の情報を勝手に補完しない。
+- 過去の選択履歴がない場合は、基本情報を中心に推薦する。
+- 根拠が少ない場合でも、候補ニュースを比較して最も適切な記事を選ぶ。
+- 過去の選択行動や興味・関心について、存在しない情報を作り出さない。
+
+【出力条件】
+- 推薦するニュースは必ず1件とする。
+- 候補ニュースに付けられたnumberから選択する。
+- news_idを新たに生成しない。
+- 推薦理由は、実際に参照した情報に基づいて具体的に説明する。
+- 推薦理由は簡潔な日本語で2〜4文程度とする。
+
+【出力形式】
+以下のJSONのみを出力する。
+
 {{
-  "recommended_number": 1,
-  "recommendation_reason": "そのニュースを選んだ理由"
+    "recommended_number": 1,
+    "recommendation_reason": "過去の選択履歴や基本情報を踏まえて、そのニュースを推薦した理由"
 }}
 
-recommended_number には、1から{len(news_list)}までの整数を指定してください。
+recommended_numberは1〜{len(news_list)}の整数とする。
 """
 
 
+# LLMを使って最推薦ニュースを決定する関数
 def _request_recommendation(
     user_profile: dict,
     news_list: list[dict],
+    past_memories: str,
 ) -> dict:
-    prompt = _build_ranking_prompt(user_profile, news_list)
+    prompt = _build_ranking_prompt(
+        user_profile,
+        news_list,
+        past_memories,
+    )
 
     try:
-        response_text = call_llm(
+        response = call_llm(
             prompt,
             json_mode=True,
             temperature=0.3,
-            max_completion_tokens=400,
         )
     except RecommendationError:
         raise
@@ -269,7 +368,8 @@ def _request_recommendation(
             f"推薦判断のLLM呼び出し中にエラーが発生しました: {e}"
         ) from e
 
-    raw = _parse_json_text(response_text)
+    # LLMの応答をJSONとして解析する
+    raw = _parse_json_text(response)
 
     candidate_ids = [
         str(news.get("news_id"))
@@ -353,6 +453,7 @@ def recommend_news(
     news_list: list[dict] | None = None,
     display_count: int = DISPLAY_NEWS_COUNT,
     seen_news_ids: set[str] | None = None,
+    user_id: str | None = None,
 ) -> dict:
     """
     既出ニュースを除外した候補から表示ニュースを取得し、
@@ -426,13 +527,25 @@ def recommend_news(
 
     print(f"【計測】本文取得＋一括要約：{time.perf_counter() - start:.2f}秒")
 
-    # AIが表示候補から最推薦1件を選ぶ
+    
+    # 過去のニュース選択履歴をRAGで取得する
+    if user_id:
+        past_memories = retrieve_recommendation_memories(
+            user_id=user_id,
+            news_list=selected_items,
+        )
+    else:
+        past_memories = "ユーザーIDが指定されていないため、過去の選択履歴は参照していません。"
+
+    # AIが過去の選択履歴と基本情報をもとに最推薦1件を選ぶ
     start = time.perf_counter()
 
     ranking = _request_recommendation(
         profile,
         selected_items,
+        past_memories,
     )
+
 
     print(f"【計測】ニュース推薦：{time.perf_counter() - start:.2f}秒")
 
@@ -524,3 +637,85 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ==========================================
+# 保存済みニュース（10件）から最推薦1件を決める関数
+# ==========================================
+def recommend_from_saved_news(
+    news_list: list[dict],
+    user_profile: dict | None = None,
+    user_id: str | None = None,
+) -> dict:
+    """
+    すでに取得・要約済みのニュース一覧（10件）を受け取り、
+    過去の記憶（Pinecone RAG）と基本情報をもとにAI推薦を実行する。
+    ※ ニュース取得・本文取得・AI要約は一切行わない。
+    """
+    if not news_list:
+        raise RecommendationError("推薦対象のニュースがありません。")
+
+    profile = (
+        user_profile
+        if user_profile is not None
+        else TEST_USER_PROFILE
+    )
+
+    selected_items = [
+        _copy_news(news)
+        for news in news_list
+    ]
+
+    # 過去のニュース選択履歴をRAGで取得する
+    if user_id:
+        past_memories = retrieve_recommendation_memories(
+            user_id=user_id,
+            news_list=selected_items,
+        )
+    else:
+        past_memories = "ユーザーIDが指定されていないため、過去の選択履歴は参照していません。"
+
+    # AIが過去の選択履歴と基本情報をもとに最推薦1件を選ぶ
+    start = time.perf_counter()
+
+    ranking = _request_recommendation(
+        profile,
+        selected_items,
+        past_memories,
+    )
+
+    print(f"【計測】ニュース推薦：{time.perf_counter() - start:.2f}秒")
+
+    recommended_id = ranking["recommended_news_id"]
+    recommended_news = None
+    other_news = []
+
+    for news in selected_items:
+        if (
+            str(news.get("news_id")) == recommended_id
+            and recommended_news is None
+        ):
+            recommended_news = news
+        else:
+            other_news.append(news)
+
+    if recommended_news is None:
+        raise RecommendationError(
+            f"推薦記事を元データに紐付けできませんでした: {recommended_id}"
+        )
+
+    reason = ranking["recommendation_reason"]
+    recommended_news["recommendation_reason"] = reason
+
+    selected_news_ids = [
+        str(news.get("news_id"))
+        for news in selected_items
+    ]
+
+    return {
+        "selected_news_ids": selected_news_ids,
+        "recommended_news_id": recommended_id,
+        "recommendation_reason": reason,
+        "recommended_news": recommended_news,
+        "other_news": other_news,
+    }

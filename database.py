@@ -462,3 +462,114 @@ def save_value_feedback(
         rows,
         value_input_option="RAW",
     )
+
+
+# ==========================================
+# 毎朝事前処理したニュースをdaily_newsシートに保存する関数
+# ==========================================
+def save_daily_news(
+    news_list: list[dict],
+    batch_date: str | None = None,
+) -> dict:
+    """
+    daily_news シートに事前要約済みのニュースを保存する。
+    - 過去の日付データは削除しない
+    - 同一バッチ日（batch_date）において、すでに存在する news_id の二重保存を防止する
+    """
+    if not news_list:
+        return {"saved_count": 0, "skipped_count": 0, "batch_date": batch_date}
+
+    spreadsheet = get_spreadsheet()
+    sheet = spreadsheet.worksheet("daily_news")
+
+    today_str = batch_date or datetime.now().strftime("%Y-%m-%d")
+    fetched_at = datetime.now().isoformat(timespec="seconds")
+
+    # 既存のレコードを取得し、同日のnews_id一覧を特定
+    existing_records = sheet.get_all_records()
+    existing_news_ids_today = set()
+
+    for record in existing_records:
+        if str(record.get("batch_date", "")).strip() == today_str:
+            news_id = str(record.get("news_id", "")).strip()
+            if news_id:
+                existing_news_ids_today.add(news_id)
+
+    rows = []
+    skipped_count = 0
+
+    for news in news_list:
+        news_id = str(news.get("news_id", "")).strip()
+        if not news_id:
+            continue
+
+        # 同日にすでに登録済みの記事は重複保存しない
+        if news_id in existing_news_ids_today:
+            skipped_count += 1
+            continue
+
+        existing_news_ids_today.add(news_id)
+
+        rows.append([
+            today_str,                                             # A: batch_date
+            news_id,                                               # B: news_id
+            news.get("category", ""),                              # C: category
+            news.get("title", ""),                                 # D: title
+            news.get("url", ""),                                   # E: url
+            news.get("source", ""),                                # F: source
+            news.get("summary", ""),                               # G: summary
+            news.get("ai_summary", "") or news.get("summary", ""), # H: ai_summary
+            news.get("published_at", ""),                          # I: published_at
+            fetched_at,                                            # J: fetched_at
+        ])
+
+    if rows:
+        sheet.append_rows(
+            rows,
+            value_input_option="RAW",
+        )
+
+    return {
+        "saved_count": len(rows),
+        "skipped_count": skipped_count,
+        "batch_date": today_str,
+    }
+
+
+# ==========================================
+# daily_newsシートから最新のニュースを取得する関数
+# ==========================================
+def get_daily_news(
+    batch_date: str | None = None,
+) -> list[dict]:
+    """
+    daily_news シートから保存済みニュースを取得する。
+    batch_date を省略した場合は、登録されている最新日付のニュース群を返す。
+    """
+    spreadsheet = get_spreadsheet()
+    sheet = spreadsheet.worksheet("daily_news")
+
+    records = sheet.get_all_records()
+    if not records:
+        return []
+
+    # batch_dateが指定されていない場合は最新日付を探索
+    if not batch_date:
+        all_dates = [
+            str(r.get("batch_date", "")).strip()
+            for r in records
+            if str(r.get("batch_date", "")).strip()
+        ]
+        if not all_dates:
+            return []
+        target_date = max(all_dates)
+    else:
+        target_date = batch_date
+
+    # 対象日付のニュースのみを抽出
+    daily_records = [
+        r for r in records
+        if str(r.get("batch_date", "")).strip() == target_date
+    ]
+
+    return daily_records
