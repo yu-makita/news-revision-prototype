@@ -38,8 +38,10 @@ jobs:
           pip install -r requirements.txt
 
       - name: Set up Google Service Account Credentials
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
         run: |
-          echo "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > google_credentials.json
+          python -c "import os, pathlib; pathlib.Path('google_credentials.json').write_text(os.environ['GOOGLE_CREDENTIALS_JSON'], encoding='utf-8')"
 
       - name: Run Daily News Batch
         env:
