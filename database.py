@@ -573,3 +573,30 @@ def get_daily_news(
     ]
 
     return daily_records
+
+
+# ==========================================
+# daily_newsシートの全ニュースレコードを取得する関数
+# ==========================================
+def get_all_daily_news() -> list[dict]:
+    """
+    daily_news シートに保存されている全ニュースレコードを取得する。
+    """
+    spreadsheet = get_spreadsheet()
+    sheet = spreadsheet.worksheet("daily_news")
+    return sheet.get_all_records()
+
+
+# ==========================================
+# ユーザーのニュース選択履歴から既読IDを取得する関数
+# ==========================================
+def get_selected_news_ids(user_id: str) -> set[str]:
+    """
+    ユーザーが過去に実際に選択したニュースIDの集合を取得する（既読判定用）。
+    """
+    history = get_selected_news_history(user_id)
+    return {
+        str(item["news_id"]).strip()
+        for item in history
+        if str(item.get("news_id", "")).strip()
+    }
